@@ -10,6 +10,7 @@ from collections.abc import Iterator
 import pytest
 
 from tools import download_sources, license_audit, verify_release_artifacts
+from tools.build_mac_opencv import validate_image_only_build
 
 
 @pytest.fixture
@@ -73,3 +74,33 @@ def test_qt_filename_alone_is_not_license_provenance(
     }
     with pytest.raises(RuntimeError, match="Native files have no known.*QtUnowned"):
         license_audit.inventory_bundle(scratch_path, inventory)
+
+
+def test_mac_rejects_live_ci_gpl_ffmpeg_build() -> None:
+    with pytest.raises(RuntimeError, match="exclude the videoio module"):
+        validate_image_only_build(
+            "    To be built: core imgproc imgcodecs python3 videoio\n"
+            "    FFMPEG: YES\n"
+            "    avcodec: YES (61.19.100)\n"
+            "    Extra dependencies: /opt/homebrew/Cellar/ffmpeg/7.1_3/lib/libavcodec.dylib\n"
+        )
+
+
+def test_mac_accepts_image_only_build() -> None:
+    validate_image_only_build(
+        "    To be built: core imgcodecs imgproc python3\n"
+        "    Unavailable: videoio\n"
+    )
+
+
+def test_mac_rejects_ffmpeg_linkage(
+    monkeypatch: pytest.MonkeyPatch, scratch_path: Path,
+) -> None:
+    library = scratch_path / "cv2.so"
+    library.write_bytes(b"native")
+    monkeypatch.setattr(license_audit.subprocess, "run", lambda *args, **kwargs: type(
+        "Result", (), {"stdout":
+            "cv2.so:\n\t@loader_path/libavcodec.61.dylib (compatibility version 61.0.0)\n"}
+    )())
+    with pytest.raises(RuntimeError, match="forbidden FFmpeg/Homebrew"):
+        license_audit.native_linkage(scratch_path, [library], "macos-arm64")

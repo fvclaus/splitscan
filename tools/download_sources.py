@@ -110,7 +110,6 @@ def main() -> int:
         ),
         ("ffmpeg-lgpl-4.4.5-source", "https://ffmpeg.org/releases/ffmpeg-4.4.5.tar.xz"),
         ("ffmpeg-lgpl-5.1.6-source", "https://ffmpeg.org/releases/ffmpeg-5.1.6.tar.xz"),
-        ("ffmpeg-lgpl-7.1.1-source", "https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz"),
         (
             "opencv-windows-ffmpeg-wrapper-source",
             "https://codeload.github.com/opencv/opencv_3rdparty/tar.gz/"
@@ -133,7 +132,6 @@ def main() -> int:
                     "cpython-source": PYTHON_SOURCE_VERSION,
                     "ffmpeg-lgpl-4.4.5-source": "4.4.5",
                     "ffmpeg-lgpl-5.1.6-source": "5.1.6",
-                    "ffmpeg-lgpl-7.1.1-source": "7.1.1",
                     "opencv-windows-ffmpeg-wrapper-source": "02a08baa7b8d330364c35477ba50524db8e4d335",
                 }.get(label, QT_SOURCE_VERSION),
                 "origin": final_url,
@@ -181,6 +179,16 @@ def main() -> int:
             }
         )
 
+    for name in ("tools/build_mac_opencv.py", "requirements-mac-opencv.txt"):
+        payload = (ROOT / name).read_bytes()
+        filename = Path(name).name
+        (output / filename).write_bytes(payload)
+        materials.append({
+            "name": f"mac-opencv-build-recipe/{filename}",
+            "version": metadata.distribution("opencv-python-headless").version,
+            "origin": f"SplitScan source repository: {name}",
+            "archive": filename, "sha256": sha256(payload), "bytes": len(payload),
+        })
     manifest = {
         "schema": 1,
         "application": "SplitScan",

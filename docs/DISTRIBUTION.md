@@ -47,12 +47,27 @@ Do not replace unrelated components based solely on a filename.
 - **Linux:** replace the manifest-listed files below `_internal/`; keep the
   launcher and support tree together and run `./SplitScan`.
 
-The OpenCV FFmpeg libraries are LGPL-2.1 components as well. Their replaceable
+The Windows and Linux OpenCV FFmpeg libraries are LGPL-2.1 components. Their replaceable
 paths are listed in `native-libraries.json` (commonly under
 `_internal/opencv_python_headless.libs/` on Linux, `cv2/.dylibs/` in macOS
 bundles, or `cv2/` on Windows). Their exact source version for each target is
 identified in the `ffmpeg` entry of that manifest and in the same-release
-corresponding-source archive.
+corresponding-source archive. macOS deliberately does **not** use the PyPI
+OpenCV wheels: the audited ARM wheel links GPLv3 Homebrew FFmpeg 7.1.
+Both Mac architectures instead compile the digest-pinned OpenCV 4.11.0.86
+source distribution with FFmpeg and the entire videoio module disabled.
+Only core, image-processing, image-codec, and Python modules are built; this
+application reads still images and does not need video decoding.
+
+`tools/build_mac_opencv.py` and `requirements-mac-opencv.txt` define the native
+recipe and pinned builder environment. Run
+`python tools/build_mac_opencv.py` on each Mac before `python tools/package.py`.
+The dependency inventory embeds the actual local wheel digest, original
+sdist URL/digest, native-file hashes, CMake arguments, and runtime build
+information rather than attributing the custom binary to a downloaded wheel.
+The source asset includes the OpenCV sdist and both recipe files. Missing or
+mismatched receipts, enabled FFmpeg/videoio, and FFmpeg/Homebrew loader imports
+fail packaging; this does not relabel a GPL binary as LGPL.
 
 The release archives are not signed/notarized. Do not disable operating
 system-wide security protections. A replacement can fail if it is not

@@ -67,6 +67,14 @@ def verify_binary(path: Path, target: str, version: str) -> None:
                 raise RuntimeError(f"Native-file checksum mismatch: {entry}")
         if not natives.get("linkage") or not natives["ffmpeg"].get("runtime_evidence"):
             raise RuntimeError(f"Native linkage/runtime evidence missing from {path.name}")
+        if target.startswith("macos-"):
+            if natives["ffmpeg"].get("enabled") is not False or natives["ffmpeg"]["files"]:
+                raise RuntimeError(f"Mac archive must not redistribute FFmpeg: {path.name}")
+            from tools.build_mac_opencv import SOURCE_SHA256
+            opencv = next(item for item in inventory["distributions"]
+                          if item["name"].lower().replace("_", "-") == "opencv-python-headless")
+            if opencv["provenance"].get("source_sha256") != SOURCE_SHA256:
+                raise RuntimeError(f"Mac archive lacks pinned OpenCV source-build provenance: {path.name}")
 
 
 def verify_sources(path: Path, version: str) -> None:
@@ -83,7 +91,8 @@ def verify_sources(path: Path, version: str) -> None:
             "cpython-source",
             "ffmpeg-lgpl-4.4.5-source",
             "ffmpeg-lgpl-5.1.6-source",
-            "ffmpeg-lgpl-7.1.1-source",
+            "mac-opencv-build-recipe/build_mac_opencv.py",
+            "mac-opencv-build-recipe/requirements-mac-opencv.txt",
             "opencv-windows-ffmpeg-wrapper-source",
             "numpy",
             "opencv-python-headless",

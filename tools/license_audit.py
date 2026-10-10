@@ -53,8 +53,6 @@ REQUIRED_DOCS = (
 )
 FFMPEG_COMPONENTS = {
     "windows-x64": ("opencv_videoio_ffmpeg4110_64.dll", "FFmpeg 4.4.5", "LGPL-2.1"),
-    "macos-x64": ("libavcodec.61.19.100.dylib", "FFmpeg 7.1.1", "LGPL-2.1"),
-    "macos-arm64": ("libavcodec.61.19.100.dylib", "FFmpeg 7.1.1", "LGPL-2.1"),
     "linux-x64": (".so.59.37.100", "FFmpeg 5.1.6", "LGPL-2.1"),
 }
 
@@ -117,9 +115,32 @@ def runtime_distributions() -> dict[str, metadata.Distribution]:
     return included
 
 
-def source_provenance(dist: metadata.Distribution) -> dict[str, str]:
+def source_provenance(dist: metadata.Distribution) -> dict[str, Any]:
     name = dist.metadata["Name"]
     version = dist.version
+    if sys.platform == "darwin" and canonical(name) == "opencv-python-headless":
+        from tools.build_mac_opencv import CMAKE_ARGS, SOURCE_SHA256, VERSION, validate_image_only_build
+        receipt = ROOT / "build" / "mac-opencv" / "provenance.json"
+        if not receipt.is_file():
+            raise RuntimeError("Mac OpenCV requires a verified image-only source-build receipt")
+        provenance = json.loads(receipt.read_text(encoding="utf-8"))
+        if version != VERSION or provenance.get("source_sha256") != SOURCE_SHA256:
+            raise RuntimeError("Mac OpenCV source-build receipt does not match pinned source")
+        target = f"macos-{'arm64' if platform.machine() == 'arm64' else 'x64'}"
+        if provenance.get("target") != target:
+            raise RuntimeError("Mac OpenCV source-build receipt has the wrong architecture")
+        if provenance.get("cmake_args") != list(CMAKE_ARGS):
+            raise RuntimeError("Mac OpenCV source-build receipt does not match image-only build flags")
+        installed, _ = installed_file_manifest(dist)
+        expected = {item["path"]: item["sha256"] for item in provenance["native_files"]}
+        if not installed or any(expected.get(item["path"]) != item["sha256"] for item in installed):
+            raise RuntimeError("Installed Mac OpenCV native files differ from locally built wheel")
+        cv2 = __import__("cv2")
+        information = cv2.getBuildInformation()
+        validate_image_only_build(information)
+        if information != provenance.get("build_information"):
+            raise RuntimeError("Mac OpenCV runtime differs from source-build receipt")
+        return provenance
     project_urls = dist.metadata.get_all("Project-URL") or []
     origin = next((entry.split(",", 1)[-1].strip() for entry in project_urls), "")
     if not origin:
@@ -363,11 +384,14 @@ def inventory_bundle(root: Path, inventory: dict[str, Any]) -> None:
         )
 
     expected_ffmpeg = FFMPEG_COMPONENTS.get(inventory["target"])
-    if expected_ffmpeg is None:
+    mac_image_only = inventory["target"].startswith("macos-")
+    if mac_image_only and ffmpeg_paths:
+        raise RuntimeError("Mac image-only bundle must not contain FFmpeg libraries")
+    if expected_ffmpeg is None and not mac_image_only:
         raise RuntimeError(f"No FFmpeg source/version mapping is recorded for {inventory['target']}")
-    if not ffmpeg_paths or not any(
+    if not mac_image_only and (not ffmpeg_paths or not any(
         expected_ffmpeg[0].lower() in Path(path).name.lower() for path in ffmpeg_paths
-    ):
+    )):
         raise RuntimeError(
             f"Packaged OpenCV FFmpeg library does not match the audited {expected_ffmpeg[1]} "
             f"marker for {inventory['target']}; found {ffmpeg_paths}"
@@ -380,6 +404,17 @@ def inventory_bundle(root: Path, inventory: dict[str, Any]) -> None:
         )
     ffmpeg_evidence = verify_ffmpeg(inventory["target"], root, ffmpeg_paths)
     linkage = native_linkage(root, native_paths, inventory["target"])
+    ffmpeg_manifest = {
+        "files": ffmpeg_paths,
+        "enabled": not mac_image_only,
+        "runtime_evidence": ffmpeg_evidence,
+    }
+    if expected_ffmpeg:
+        ffmpeg_manifest.update({
+            "version": expected_ffmpeg[1], "license": expected_ffmpeg[2],
+            "source_archive": f"ffmpeg-{expected_ffmpeg[1].split()[-1]}.tar.xz",
+            "source_is_included_in_corresponding_source_asset": True,
+        })
     system_dependencies_path = root / "system-dependencies.json"
     system_dependencies: dict[str, Any] = {
         "provided_by_target_os": [],
@@ -394,14 +429,7 @@ def inventory_bundle(root: Path, inventory: dict[str, Any]) -> None:
                 "target": inventory["target"],
                 "version": inventory["version"],
                 "native_files": records,
-                "ffmpeg": {
-                    "files": ffmpeg_paths,
-                    "version": expected_ffmpeg[1],
-                    "license": expected_ffmpeg[2],
-                    "source_archive": f"ffmpeg-{expected_ffmpeg[1].split()[-1]}.tar.xz",
-                    "source_is_included_in_corresponding_source_asset": True,
-                    "runtime_evidence": ffmpeg_evidence,
-                },
+                "ffmpeg": ffmpeg_manifest,
                 "linkage": linkage,
                 "system_dependencies": system_dependencies,
             },
@@ -415,6 +443,14 @@ def inventory_bundle(root: Path, inventory: dict[str, Any]) -> None:
 
 def verify_ffmpeg(target: str, root: Path, paths: list[str]) -> dict[str, str]:
         """Check actual FFmpeg version/license, rather than infer them from a soname."""
+        if target.startswith("macos-"):
+            from tools.build_mac_opencv import validate_image_only_build
+            cv2 = __import__("cv2")
+            validate_image_only_build(cv2.getBuildInformation())
+            if paths:
+                raise RuntimeError("Mac image-only bundle unexpectedly contains FFmpeg")
+            return {"method": "runtime build information and native linkage",
+                    "status": "FFmpeg disabled; videoio module not built"}
         expected = FFMPEG_COMPONENTS[target][1].split()[-1]
         if target == "windows-x64":
             payload = (root / paths[0]).read_bytes()
@@ -460,6 +496,10 @@ def native_linkage(root: Path, paths: list[Path], target: str) -> list[dict[str,
             elif target.startswith("macos"):
                 result = subprocess.run(["otool", "-L", str(path)], capture_output=True, text=True, check=True)
                 imports = result.stdout.strip().splitlines()[1:]
+                forbidden = ("libavcodec", "libavformat", "libavutil", "libswscale",
+                             "libswresample", "/opt/homebrew", "/usr/local/Cellar")
+                if any(token in line for token in forbidden for line in imports):
+                    raise RuntimeError(f"Mac native imports forbidden FFmpeg/Homebrew dependency: {path}")
             else:
                 import pefile
                 image = pefile.PE(str(path), fast_load=True)
