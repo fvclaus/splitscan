@@ -120,6 +120,8 @@ def main() -> int:
     for label, url in official_archives:
         payload, final_url = fetch(url)
         filename = url.rsplit("/", 1)[-1]
+        if "/tar.gz/" in url:
+            filename += ".tar.gz"
         destination = output / filename
         destination.write_bytes(payload)
         if not archive_is_readable(destination):

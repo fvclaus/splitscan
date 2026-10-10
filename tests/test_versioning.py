@@ -66,3 +66,16 @@ def test_release_tag_must_be_valid_and_match_candidate() -> None:
         text=True,
     )
     assert rejected.returncode != 0
+
+
+def test_validate_tag_does_not_override_actions_version(tmp_path) -> None:
+    environment = tmp_path / "github-env"
+    environment.write_text("SPLITSCAN_VERSION=0.1.0\n")
+    output = tmp_path / "github-output"
+    subprocess.run(
+        [sys.executable, "tools/release.py", "validate-tag", "--tag", "v2.4.1"],
+        cwd=ROOT, check=True, capture_output=True,
+        env={**os.environ, "GITHUB_ENV": str(environment), "GITHUB_OUTPUT": str(output)},
+    )
+    assert environment.read_text() == "SPLITSCAN_VERSION=0.1.0\n"
+    assert not output.exists()

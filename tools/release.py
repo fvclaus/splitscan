@@ -74,6 +74,8 @@ def main() -> int:
         parser.error(str(error))
 
     print(version)
+    if args.command != "resolve":
+        return 0
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         with Path(output).open("a", encoding="utf-8") as stream:
