@@ -1,3 +1,5 @@
 """Local flatbed-scan photo splitter."""
 
-__version__ = "0.1.0"
+from photo_splitter.version import __version__
+
+__all__ = ["__version__"]

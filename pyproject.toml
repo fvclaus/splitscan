@@ -1,24 +1,30 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools==80.9.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "photo-splitter"
-version = "0.1.0"
 description = "A local desktop app for splitting flatbed scans into individual photos."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "docs/THIRD_PARTY_NOTICES.md", "docs/licenses/*.txt"]
+dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=1.26",
-    "opencv-python>=4.9",
-    "PySide6>=6.7",
+    "numpy==2.2.6",
+    "opencv-python-headless==4.11.0.86",
+    "PySide6-Essentials==6.8.3",
+    "sentry-sdk==2.27.0",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+test = ["pytest==8.3.5"]
 
 [project.scripts]
 photo-splitter = "photo_splitter.app:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "photo_splitter.version.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

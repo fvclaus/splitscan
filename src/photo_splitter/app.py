@@ -35,8 +35,9 @@ def smoke_test(app: QApplication) -> int:
         import PySide6
         import shiboken6
         import importlib.util
+        from PySide6 import QtCore, QtGui, QtWidgets
 
-        for module in (PySide6, shiboken6, cv2, np):
+        for module in (PySide6, QtCore, QtGui, QtWidgets, shiboken6, cv2, np):
             location = Path(module.__file__).resolve()
             assert location.is_relative_to(bundle.resolve()), location
         sdk = importlib.util.find_spec("sentry_sdk")
@@ -71,7 +72,15 @@ def main() -> int:
     app.setFont(QFont("Inter", 10))
     if testing:
         return smoke_test(app)
-    telemetry.configure(Preferences().crash_reporting())
+    preferences = Preferences()
+    try:
+        telemetry.configure(preferences.crash_reporting())
+    except (ImportError, ValueError, OSError) as error:
+        QMessageBox.warning(
+            None, "Crash reporting unavailable",
+            f"Crash reporting could not start and remains disabled:\n{error}",
+        )
+        telemetry.configure(False)
     previous_hook = sys.excepthook
     window = None
 
