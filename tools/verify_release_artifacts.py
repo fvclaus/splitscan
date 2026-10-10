@@ -124,12 +124,12 @@ def verify_sources(path: Path, version: str) -> None:
             "opencv-windows-ffmpeg-wrapper-source",
             "numpy",
             "opencv-python-headless",
-            "PyInstaller",
+            "pyinstaller",
             "sentry-sdk",
         }
-        available = {item["name"] for item in manifest.get("materials", [])}
+        available = {item["name"].lower() for item in manifest.get("materials", [])}
         if not required.issubset(available):
-            raise RuntimeError("Corresponding-source archive lacks Qt, Qt for Python, or Python source")
+            raise RuntimeError(f"Corresponding-source archive lacks required materials: {sorted(required - available)}")
         for item in manifest["materials"]:
             name = item["archive"]
             if name not in names:

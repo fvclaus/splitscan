@@ -146,3 +146,30 @@ def test_release_verifier_runs_as_standalone_script(tmp_path):
         cwd=tmp_path, capture_output=True, text=True, check=True,
     )
     assert "--version" in result.stdout
+
+
+@pytest.mark.parametrize("installer", ["pyinstaller", "PyInstaller"])
+def test_source_gate_accepts_normalized_distribution_names(tmp_path, installer):
+    names = [
+        "qt-everywhere-source", "pyside6-and-shiboken-source", "cpython-source",
+        "ffmpeg-lgpl-4.4.5-source", "ffmpeg-lgpl-5.1.6-source",
+        "mac-opencv-build-recipe/build_mac_opencv.py",
+        "mac-opencv-build-recipe/requirements-mac-opencv.txt",
+        "opencv-windows-ffmpeg-wrapper-source", "numpy", "opencv-python-headless",
+        installer, "sentry-sdk",
+    ]
+    path = tmp_path / "sources.zip"
+    materials = []
+    with zipfile.ZipFile(path, "w") as archive:
+        for index, name in enumerate(names):
+            entry = f"source-{index}"
+            archive.writestr(entry, b"source")
+            materials.append({
+                "name": name, "archive": entry,
+                "sha256": verify_release_artifacts.sha256(b"source"),
+            })
+        archive.writestr("README.txt", "Sources")
+        archive.writestr("source-materials.json", json.dumps({
+            "version": "0.1.0", "materials": materials,
+        }))
+    verify_release_artifacts.verify_sources(path, "0.1.0")
