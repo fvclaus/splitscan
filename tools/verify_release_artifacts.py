@@ -14,8 +14,10 @@ from pathlib import Path
 
 TARGETS = ("windows-x64", "macos-x64", "macos-arm64", "linux-x64")
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 from photo_splitter.version import validate_version
+from tools.build_mac_opencv import SOURCE_SHA256
 LICENSE_PATHS = (
     "THIRD_PARTY_NOTICES/licenses/LGPL-3.0.txt",
     "THIRD_PARTY_NOTICES/licenses/GPL-3.0.txt",
@@ -97,7 +99,6 @@ def verify_binary(path: Path, target: str, version: str) -> None:
         if target.startswith("macos-"):
             if natives["ffmpeg"].get("enabled") is not False or natives["ffmpeg"]["files"]:
                 raise RuntimeError(f"Mac archive must not redistribute FFmpeg: {path.name}")
-            from tools.build_mac_opencv import SOURCE_SHA256
             opencv = next(item for item in inventory["distributions"]
                           if item["name"].lower().replace("_", "-") == "opencv-python-headless")
             if opencv["provenance"].get("source_sha256") != SOURCE_SHA256:

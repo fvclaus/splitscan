@@ -6,6 +6,7 @@ import shutil
 import uuid
 import stat
 import zipfile
+import subprocess
 from pathlib import Path
 from collections.abc import Iterator
 
@@ -137,3 +138,11 @@ def test_archive_checksum_rejects_escaping_or_cyclic_links(tmp_path, target):
     with zipfile.ZipFile(path) as archive:
         with pytest.raises(RuntimeError, match="symlink"):
             verify_release_artifacts.archive_file_bytes(archive, "SplitScan.app/link", "SplitScan.app")
+
+
+def test_release_verifier_runs_as_standalone_script(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(Path(verify_release_artifacts.__file__).resolve()), "--help"],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+    )
+    assert "--version" in result.stdout
