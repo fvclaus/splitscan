@@ -41,12 +41,11 @@ def validate_image_only_build(information: str) -> None:
         raise RuntimeError("Custom Mac OpenCV must exclude the videoio module")
     if re.search(r"^\s*FFMPEG:\s*YES", information, re.MULTILINE):
         raise RuntimeError("GPL-capable FFmpeg must not be enabled in Mac OpenCV")
-    if any(token in information for token in ("/opt/homebrew", "/Cellar/ffmpeg")):
-        # The configured ignore-prefix flag itself can appear in build information.
-        lines = [line for line in information.splitlines()
-                 if "CMAKE_IGNORE_PREFIX_PATH" not in line]
-        if any("/opt/homebrew" in line or "/Cellar/ffmpeg" in line for line in lines):
-            raise RuntimeError("Custom Mac OpenCV unexpectedly uses Homebrew build dependencies")
+    for line in information.splitlines():
+        if "Extra dependencies:" in line and any(
+            token in line for token in ("/opt/homebrew", "/usr/local/Cellar", "avcodec", "avformat")
+        ):
+            raise RuntimeError(f"Custom Mac OpenCV links unapproved dependencies: {line}")
 
 
 def main() -> int:

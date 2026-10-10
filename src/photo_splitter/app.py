@@ -30,6 +30,7 @@ def smoke_test(app: QApplication) -> int:
     assert (ASSETS / "scan.svg").is_file()
     if getattr(sys, "frozen", False):
         bundle = Path(sys._MEIPASS)
+        package_root = bundle.parent if sys.platform == "darwin" else bundle
         for name in ("LGPL-3.0.txt", "GPL-3.0.txt", "LGPL-2.1.txt", "Python-PSF.txt"):
             assert (bundle / "THIRD_PARTY_NOTICES" / "licenses" / name).is_file(), name
         import PySide6
@@ -39,9 +40,9 @@ def smoke_test(app: QApplication) -> int:
 
         for module in (PySide6, QtCore, QtGui, QtWidgets, shiboken6, cv2, np):
             location = Path(module.__file__).resolve()
-            assert location.is_relative_to(bundle.resolve()), location
+            assert location.is_relative_to(package_root.resolve()), location
         sdk = importlib.util.find_spec("sentry_sdk")
-        assert sdk is not None and Path(sdk.origin).resolve().is_relative_to(bundle.resolve())
+        assert sdk is not None and Path(sdk.origin).resolve().is_relative_to(package_root.resolve())
     with tempfile.TemporaryDirectory() as directory:
         results = export_photos(
             image, tuple(item.confirmed() for item in outcome.boundaries),
