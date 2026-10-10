@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import posixpath
+import stat
 import sys
 import zipfile
 from pathlib import Path
@@ -24,6 +26,31 @@ LICENSE_PATHS = (
 
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def archive_file_bytes(archive: zipfile.ZipFile, entry: str, bundle: str) -> bytes:
+    visited = set()
+    names = set(archive.namelist())
+    while True:
+        if entry in visited or len(visited) >= 40 or not entry.startswith(bundle + "/"):
+            raise RuntimeError(f"Invalid or cyclic archive symlink: {entry}")
+        visited.add(entry)
+        parts = entry.split("/")
+        link = None
+        for index in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:index])
+            if prefix in names and stat.S_ISLNK(archive.getinfo(prefix).external_attr >> 16):
+                link = (prefix, parts[index:])
+                break
+        if link is None:
+            if entry not in names:
+                raise RuntimeError(f"Missing archive symlink target or file: {entry}")
+            return archive.read(entry)
+        prefix, suffix = link
+        target = archive.read(prefix).decode("utf-8")
+        if posixpath.isabs(target):
+            raise RuntimeError(f"Absolute archive symlink: {entry}")
+        entry = posixpath.normpath(posixpath.join(posixpath.dirname(prefix), target, *suffix))
 
 
 def verify_binary(path: Path, target: str, version: str) -> None:
@@ -63,7 +90,7 @@ def verify_binary(path: Path, target: str, version: str) -> None:
             raise RuntimeError(f"Unmapped native component in {path.name}")
         for native in natives["native_files"]:
             entry = f"{bundle}/{native['path']}"
-            if entry not in names or sha256(archive.read(entry)) != native["sha256"]:
+            if entry not in names or sha256(archive_file_bytes(archive, entry, bundle)) != native["sha256"]:
                 raise RuntimeError(f"Native-file checksum mismatch: {entry}")
         if not natives.get("linkage") or not natives["ffmpeg"].get("runtime_evidence"):
             raise RuntimeError(f"Native linkage/runtime evidence missing from {path.name}")

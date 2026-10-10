@@ -4,6 +4,8 @@ import json
 import sys
 import shutil
 import uuid
+import stat
+import zipfile
 from pathlib import Path
 from collections.abc import Iterator
 
@@ -104,3 +106,34 @@ def test_mac_rejects_ffmpeg_linkage(
     )())
     with pytest.raises(RuntimeError, match="forbidden FFmpeg/Homebrew"):
         license_audit.native_linkage(scratch_path, [library], "macos-arm64")
+
+
+def test_archive_native_checksum_follows_framework_symlink(tmp_path):
+    path = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("SplitScan.app/QtCore/Versions/A/QtCore", b"native bytes")
+        current = zipfile.ZipInfo("SplitScan.app/QtCore/Versions/Current")
+        current.create_system = 3
+        current.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(current, "A")
+        link = zipfile.ZipInfo("SplitScan.app/QtCore/QtCore")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(link, "Versions/Current/QtCore")
+    with zipfile.ZipFile(path) as archive:
+        assert verify_release_artifacts.archive_file_bytes(
+            archive, "SplitScan.app/QtCore/QtCore", "SplitScan.app"
+        ) == b"native bytes"
+
+
+@pytest.mark.parametrize("target", ["../../private", "/private", "link"])
+def test_archive_checksum_rejects_escaping_or_cyclic_links(tmp_path, target):
+    path = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        link = zipfile.ZipInfo("SplitScan.app/link")
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(link, target)
+    with zipfile.ZipFile(path) as archive:
+        with pytest.raises(RuntimeError, match="symlink"):
+            verify_release_artifacts.archive_file_bytes(archive, "SplitScan.app/link", "SplitScan.app")
