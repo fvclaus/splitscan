@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import cv2
 import numpy as np
@@ -34,6 +35,8 @@ class ScanView(QWidget):
         self._drag_current: QPointF | None = None
         self._add_mode = False
         self._panning = False
+        self._space_pan = False
+        self._pan_button = Qt.MouseButton.NoButton
         self._last_mouse = QPointF()
         self._loupe_factor = 3.0
         self._original_boundary: PhotoBoundary | None = None
@@ -51,7 +54,13 @@ class ScanView(QWidget):
     def selected_boundary_index(self) -> int:
         return self._selected
 
+    @property
+    def editing_boundary(self) -> bool:
+        return self._drag_corner is not None
+
     def set_scan(self, image: np.ndarray, boundaries: tuple[PhotoBoundary, ...]) -> None:
+        self._add_mode = False
+        self._stop_pan()
         self._image = image
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         height, width = rgb.shape[:2]
@@ -62,6 +71,8 @@ class ScanView(QWidget):
         self._pan = QPointF()
         self._drag_corner = None
         self._drag_start = None
+        self._drag_current = None
+        self._original_boundary = None
         self.fit_scan()
         self.update()
         self.boundaries_changed.emit(self.boundaries)
@@ -73,9 +84,42 @@ class ScanView(QWidget):
 
     def confirm_selected_boundary(self) -> None:
         if 0 <= self._selected < len(self._boundaries):
+            if self._image is None or not validate_corners(
+                self._boundaries[self._selected].corners, self._image.shape
+            ):
+                self.edit_rejected.emit("Adjust the boundary to a valid outline inside the scan.")
+                return
             self._boundaries[self._selected] = self._boundaries[self._selected].confirmed()
             self.boundaries_changed.emit(self.boundaries)
             self.update()
+
+    def activate_boundary(self, boundary_id: str) -> None:
+        for index, boundary in enumerate(self._boundaries):
+            if boundary.boundary_id == boundary_id:
+                self._selected = index
+                center = QPointF(
+                    sum(point[0] for point in boundary.corners) / 4,
+                    sum(point[1] for point in boundary.corners) / 4,
+                )
+                self._pan += QPointF(self.width() / 2, self.height() / 2) - self._image_to_widget(
+                    center.x(), center.y()
+                )
+                self.selection_changed.emit()
+                self.update()
+                return
+        raise ValueError("Review boundary no longer exists.")
+
+    def _restore_cursor(self) -> None:
+        self.setCursor(
+            Qt.CursorShape.OpenHandCursor if self._space_pan else
+            Qt.CursorShape.CrossCursor if self._add_mode else Qt.CursorShape.ArrowCursor
+        )
+
+    def _stop_pan(self) -> None:
+        self._panning = False
+        self._space_pan = False
+        self._pan_button = Qt.MouseButton.NoButton
+        self._restore_cursor()
 
     def fit_scan(self) -> None:
         if self._image is None:
@@ -127,7 +171,10 @@ class ScanView(QWidget):
             active = index == self._selected
             color = QColor("#286b58") if boundary.selected else QColor("#89918b")
             pen = QPen(color, 2.5 if active else 1.5)
-            if boundary.needs_review:
+            requires_review = boundary.needs_review or not validate_corners(
+                boundary.corners, self._image.shape
+            )
+            if requires_review:
                 pen.setStyle(Qt.PenStyle.DashLine)
                 pen.setColor(QColor("#bd6b2b"))
             painter.setPen(pen)
@@ -140,7 +187,7 @@ class ScanView(QWidget):
                 painter.setPen(QPen(Qt.GlobalColor.white, 1))
                 painter.setBrush(color)
                 painter.drawEllipse(point, radius, radius)
-                if active and boundary.needs_review and number == 0:
+                if active and requires_review and number == 0:
                     painter.setPen(QColor("#8a451c"))
                     painter.drawText(point + QPointF(8, -8), "Review")
 
@@ -196,8 +243,13 @@ class ScanView(QWidget):
             return
         position = event.position()
         self._last_mouse = position
-        if event.button() == Qt.MouseButton.MiddleButton:
+        self.setFocus()
+        if self._drag_corner is None and self._drag_start is None and (
+            event.button() == Qt.MouseButton.MiddleButton
+            or (event.button() == Qt.MouseButton.LeftButton and self._space_pan)
+        ):
             self._panning = True
+            self._pan_button = event.button()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
         if event.button() != Qt.MouseButton.LeftButton:
@@ -261,6 +313,14 @@ class ScanView(QWidget):
             if validate_corners(updated, self._image.shape):
                 self._boundaries[boundary_index] = boundary.with_corners(updated)
                 self.boundaries_changed.emit(self.boundaries)
+            elif self._original_boundary is not None and not validate_corners(
+                self._original_boundary.corners, self._image.shape
+            ):
+                self._boundaries[boundary_index] = replace(
+                    boundary, corners=updated, needs_review=True, user_confirmed=False
+                )
+                self.boundaries_changed.emit(self.boundaries)
+                self.edit_rejected.emit("Continue adjusting: this outline is not yet valid.")
             else:
                 self.edit_rejected.emit("Keep the boundary convex with four distinct corners.")
         elif self._add_mode and self._drag_start is not None:
@@ -271,12 +331,18 @@ class ScanView(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.MiddleButton or self._panning:
-            self._panning = False
-            self.setCursor(Qt.CursorShape.CrossCursor if self._add_mode else Qt.CursorShape.ArrowCursor)
+        if self._panning:
+            if event.button() == self._pan_button:
+                self._panning = False
+                self._pan_button = Qt.MouseButton.NoButton
+                self._restore_cursor()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._drag_corner is not None:
             index, _ = self._drag_corner
-            self._boundaries[index] = self._boundaries[index].confirmed()
+            changed = self._boundaries[index] != self._original_boundary
+            valid = validate_corners(self._boundaries[index].corners, self._image.shape)
+            if changed and valid:
+                self._boundaries[index] = self._boundaries[index].confirmed()
             self._drag_corner = None
             self._original_boundary = None
             self._drag_current = None
@@ -309,7 +375,14 @@ class ScanView(QWidget):
         self.update()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() == Qt.Key.Key_Escape:
+        if event.key() == Qt.Key.Key_Space:
+            if not event.isAutoRepeat() and self._drag_corner is None and self._drag_start is None:
+                self._space_pan = True
+                if not self._panning:
+                    self._restore_cursor()
+            event.accept()
+        elif event.key() == Qt.Key.Key_Escape:
+            self._stop_pan()
             if self._drag_corner is not None and self._original_boundary is not None:
                 index, _ = self._drag_corner
                 self._boundaries[index] = self._original_boundary
@@ -324,9 +397,51 @@ class ScanView(QWidget):
         else:
             super().keyPressEvent(event)
 
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Space:
+            if not event.isAutoRepeat():
+                self._space_pan = False
+                if not self._panning:
+                    self._restore_cursor()
+            event.accept()
+        else:
+            super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        self._stop_pan()
+        if self._drag_corner is not None and self._original_boundary is not None:
+            self._boundaries[self._drag_corner[0]] = self._original_boundary
+            self._drag_corner = None
+            self._original_boundary = None
+            self.boundaries_changed.emit(self.boundaries)
+        self._drag_start = None
+        self._drag_current = None
+        super().focusOutEvent(event)
+        self.update()
+
     def wheelEvent(self, event) -> None:  # noqa: N802
-        if event.angleDelta().y():
-            self.zoom_by(1.12 if event.angleDelta().y() > 0 else 1 / 1.12)
+        if self._image is None:
+            return
+        pixel = event.pixelDelta()
+        angle = event.angleDelta()
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = pixel.y() or angle.y()
+            if delta:
+                self.zoom_by(1.12 if delta > 0 else 1 / 1.12)
+        elif event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            delta = (pixel.x() or pixel.y()) if not pixel.isNull() else (
+                angle.x() or angle.y()
+            ) / 3
+            self._pan += QPointF(delta, 0)
+            self.update()
+        elif pixel.x() or angle.x():
+            self._pan += QPointF(pixel.x() if pixel.x() else angle.x() / 3, 0)
+            self.update()
+        else:
+            delta = pixel.y() or angle.y()
+            if delta:
+                self.zoom_by(1.12 if delta > 0 else 1 / 1.12)
+        event.accept()
 
     def _hit_corner(self, point: QPointF) -> tuple[int, int] | None:
         for boundary_index, boundary in enumerate(self._boundaries):

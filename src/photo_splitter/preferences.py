@@ -34,3 +34,14 @@ class Preferences:
         if not 1 <= value <= 80:
             raise ValueError("Detection threshold must be between 1 and 80.")
         self._settings.setValue("detection_threshold", value)
+
+    def crash_reporting(self) -> bool:
+        return self._settings.value("crash_reporting", False, type=bool)
+
+    def set_crash_reporting(self, enabled: bool) -> None:
+        previous = self.crash_reporting()
+        self._settings.setValue("crash_reporting", enabled)
+        self._settings.sync()
+        if self._settings.status() != QSettings.Status.NoError:
+            self._settings.setValue("crash_reporting", previous)
+            raise OSError("Could not save crash-reporting preference.")

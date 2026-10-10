@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 from threading import Event
 
 import cv2
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from photo_splitter.detection import OpenCVPhotoDetector
+from photo_splitter.detection.geometry import validate_corners
 from photo_splitter.domain import (
     AmbiguousDetections,
     DetectionFailure,
@@ -41,6 +43,7 @@ from photo_splitter.imaging import (
     read_scan,
 )
 from photo_splitter.preferences import Preferences
+from photo_splitter import telemetry
 from photo_splitter.widgets.photo_grid import PhotoGrid, PhotoPreview
 from photo_splitter.widgets.scan_view import ScanView
 from photo_splitter.workers import Worker
@@ -58,7 +61,7 @@ ASSETS = Path(__file__).parent / "assets"
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Keepsake — Photo Splitter")
+        self.setWindowTitle("SplitScan")
         self.setMinimumSize(800, 700)
         self.resize(1440, 900)
         self.setStyleSheet(
@@ -86,6 +89,7 @@ class MainWindow(QMainWindow):
         self._boundaries_modified = False
         self._updating_scan_view = False
         self._working = False
+        self._reviewing = False
         self._cancel_event = Event()
         self._output_directory = self._preferences.output_directory()
         self._threshold_timer = QTimer(self)
@@ -112,11 +116,14 @@ class MainWindow(QMainWindow):
         brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         brand_mark.setFixedSize(30, 30)
         brand_mark.setStyleSheet(f"background:{GREEN}; color:white; border-radius:7px; font-size:18px;")
-        brand = QLabel("Keepsake")
+        brand = QLabel("SplitScan")
         brand.setFont(QFont("Inter", 15, QFont.Weight.Medium))
         header_layout.addWidget(brand_mark)
         header_layout.addWidget(brand)
         header_layout.addStretch()
+        self.about_button = QPushButton("About")
+        self.about_button.clicked.connect(self._show_about)
+        header_layout.addWidget(self.about_button)
         self.import_button = QPushButton("Import scan")
         self.import_button.setIcon(QIcon(str(ASSETS / "plus.svg")))
         self.import_button.clicked.connect(self._choose_scan)
@@ -171,8 +178,9 @@ class MainWindow(QMainWindow):
         shield = QLabel()
         shield.setPixmap(QIcon(str(ASSETS / "shield.svg")).pixmap(16, 16))
         footer.addWidget(shield)
-        self.privacy_label = QLabel("Your memories stay yours. All processing happens on this device.")
+        self.privacy_label = QLabel("All processing happens on device")
         self.privacy_label.setStyleSheet(f"color:{MUTED}; font-size:11px;")
+        self.privacy_label.setMinimumWidth(250)
         self.privacy_label.setWordWrap(True)
         footer.addWidget(self.privacy_label)
         footer.addStretch()
@@ -181,6 +189,16 @@ class MainWindow(QMainWindow):
         tip.setStyleSheet(f"color:{MUTED}; font-size:11px;")
         footer.addWidget(tip)
         root_layout.addLayout(footer)
+        reporting_row = QHBoxLayout()
+        self.crash_reporting = QCheckBox("Send sanitized crash reports (optional)")
+        self.crash_reporting.setChecked(self._preferences.crash_reporting())
+        self.crash_reporting.toggled.connect(self._set_crash_reporting)
+        reporting_row.addWidget(self.crash_reporting)
+        disclosure = QLabel("When enabled, diagnostics go to Sentry. Photos and filenames are not sent.")
+        disclosure.setWordWrap(True)
+        disclosure.setStyleSheet(f"color:{MUTED}; font-size:11px;")
+        reporting_row.addWidget(disclosure)
+        root_layout.addLayout(reporting_row)
 
         status_bar = QFrame()
         status_bar.setObjectName("status")
@@ -277,7 +295,24 @@ class MainWindow(QMainWindow):
         source_footer.addWidget(self.threshold_spin)
         source_footer.addWidget(self.re_detect_button)
         layout.addLayout(source_footer)
-        layout.addWidget(self.confirm_boundary_button)
+        self.review_message = QLabel()
+        self.review_message.setWordWrap(True)
+        self.review_message.setStyleSheet("color:#8a451c; padding:8px 16px;")
+        layout.addWidget(self.review_message)
+        review_actions = QHBoxLayout()
+        review_actions.addWidget(self.confirm_boundary_button)
+        self.exclude_boundary_button = QPushButton("Exclude photo")
+        self.exclude_boundary_button.clicked.connect(self._exclude_review_boundary)
+        review_actions.addWidget(self.exclude_boundary_button)
+        layout.addLayout(review_actions)
+        gestures = QLabel(
+            "Pan: Space + drag or middle-drag · Zoom: wheel / Ctrl + wheel\n"
+            "Horizontal pan: Shift + wheel · Drag a corner to adjust · Esc cancels"
+        )
+        gestures.setWordWrap(True)
+        gestures.setStyleSheet(f"color:{MUTED}; font-size:11px; padding:8px 16px;")
+        self.scan_view.setToolTip(gestures.text())
+        layout.addWidget(gestures)
         self.source_panel = panel
         return panel
 
@@ -421,7 +456,69 @@ class MainWindow(QMainWindow):
         return response == QMessageBox.StandardButton.Yes
 
     def _confirm_boundary(self) -> None:
+        if self._working:
+            return
         self.scan_view.confirm_selected_boundary()
+
+    def _show_about(self) -> None:
+        from photo_splitter.version import __version__
+
+        QMessageBox.information(
+            self, "About SplitScan",
+            f"SplitScan {__version__}\n"
+            "MIT licensed application. Uses PySide6 / Qt under LGPLv3.\n"
+            "Portable downloads include third-party notices and library replacement instructions.\n"
+            "Downloads: https://github.com/fvclaus/splitscan/releases/latest",
+        )
+
+    def _set_crash_reporting(self, enabled: bool) -> None:
+        previous = self._preferences.crash_reporting()
+        try:
+            self._preferences.set_crash_reporting(enabled)
+            telemetry.configure(enabled)
+        except (OSError, ImportError, ValueError) as exc:
+            rollback_error = ""
+            try:
+                self._preferences.set_crash_reporting(previous)
+            except OSError as error:
+                rollback_error = f"\nCould not restore saved consent: {error}"
+            telemetry.configure(previous)
+            self.crash_reporting.blockSignals(True)
+            self.crash_reporting.setChecked(previous)
+            self.crash_reporting.blockSignals(False)
+            QMessageBox.warning(self, "Could not change crash reporting", str(exc) + rollback_error)
+
+    def _review_boundaries(self) -> tuple[PhotoBoundary, ...]:
+        if self._scan is None:
+            return ()
+        return tuple(
+            item for item in self._boundaries if item.selected and (
+                (item.needs_review and not item.user_confirmed)
+                or not validate_corners(item.corners, self._scan.shape)
+            )
+        )
+
+    def _advance_review(self) -> None:
+        if not self._reviewing or self._working:
+            return
+        pending = self._review_boundaries()
+        if pending:
+            self.scan_view.activate_boundary(pending[0].boundary_id)
+        else:
+            self._reviewing = False
+            self._set_status("Selected boundaries ready" if any(
+                item.selected for item in self._boundaries
+            ) else "No photos selected")
+        self._update_detection_status()
+
+    def _exclude_review_boundary(self) -> None:
+        index = self.scan_view.selected_boundary_index
+        if self._working or not 0 <= index < len(self._boundaries):
+            return
+        boundaries = list(self._boundaries)
+        boundaries[index] = replace(boundaries[index], selected=False)
+        self.scan_view.set_boundaries(tuple(boundaries))
+        self._boundaries_changed(tuple(boundaries))
 
     def _threshold_changed(self, value: int) -> None:
         self._preferences.set_detection_threshold(value)
@@ -463,6 +560,11 @@ class MainWindow(QMainWindow):
             self._invalidate_previews()
         self._update_detection_status()
         self._update_controls()
+        if self._reviewing and not self.scan_view.editing_boundary:
+            index = self.scan_view.selected_boundary_index
+            active = boundaries[index] if 0 <= index < len(boundaries) else None
+            if active not in self._review_boundaries():
+                self._advance_review()
 
     def _selection_changed(self) -> None:
         selected = sum(boundary.selected for boundary in self._boundaries)
@@ -474,8 +576,12 @@ class MainWindow(QMainWindow):
     def _update_detection_status(self) -> None:
         count = len(self._boundaries)
         selected = sum(boundary.selected for boundary in self._boundaries)
-        self.extract_selection_label.setText(f"{selected} photos selected")
-        self.extract_button.setText(f"Extract {selected} photos")
+        self.extract_selection_label.setText(f"{selected} photo{'s' if selected != 1 else ''} selected")
+        pending = self._review_boundaries()
+        self.extract_button.setText(
+            f"Review {len(pending)} {'boundary' if len(pending) == 1 else 'boundaries'}"
+            if pending else f"Extract {selected} photo{'s' if selected != 1 else ''}"
+        )
         self.extract_button.setIcon(QIcon(str(ASSETS / "arrow.svg")))
         self.detected_badge.setText(f"{count} photo{'s' if count != 1 else ''} detected")
         self._update_controls()
@@ -491,20 +597,40 @@ class MainWindow(QMainWindow):
         self.threshold_spin.setEnabled(has_scan and not self._working)
         self.re_detect_button.setEnabled(has_scan and not self._working)
         selected_index = self.scan_view.selected_boundary_index
-        needs_confirmation = (
-            0 <= selected_index < len(self._boundaries)
-            and self._boundaries[selected_index].needs_review
-            and not self._boundaries[selected_index].user_confirmed
+        pending = self._review_boundaries()
+        active = self._boundaries[selected_index] if 0 <= selected_index < len(self._boundaries) else None
+        valid = active is not None and self._scan is not None and validate_corners(
+            active.corners, self._scan.shape
         )
-        self.confirm_boundary_button.setEnabled(needs_confirmation and not self._working)
-        self.confirm_boundary_button.setVisible(needs_confirmation)
+        active_review = active is not None and active in pending
+        self.review_message.setVisible(bool(pending))
+        message = f"{len(pending)} selected photo{'s' if len(pending) != 1 else ''} need review. Dashed outlines are suggestions."
+        if self._reviewing and active_review:
+            message = f"Photo {selected_index + 1} · {len(pending)} remaining. " + (
+                "Confirm this outline, adjust its corners, or exclude the photo." if valid else
+                "Adjust this boundary to a valid outline inside the scan, or exclude it."
+            )
+        self.review_message.setText(message)
+        self.confirm_boundary_button.setText("Confirm & next" if self._reviewing else "Confirm boundary")
+        self.confirm_boundary_button.setEnabled(active_review and valid and not self._working)
+        self.confirm_boundary_button.setVisible(active_review)
+        self.exclude_boundary_button.setVisible(self._reviewing and active_review)
+        self.exclude_boundary_button.setEnabled(not self._working)
+        if not self._working:
+            self.ready_badge.setText(
+                "Review required" if pending else "Ready to export" if self.photo_grid.items else
+                "Ready to extract" if has_scan and any(item.selected for item in self._boundaries)
+                else "No photos selected" if has_scan else "Ready when you are"
+            )
         self.select_all.setEnabled(bool(self._boundaries) and not self._working)
         self.folder_button.setEnabled(not self._working)
         self.auto_straighten.setEnabled(not self._working)
         self.trim_borders.setEnabled(not self._working)
         self.photo_grid.setEnabled(not self._working)
         self.cancel_button.setVisible(self._working)
-        self.export_button.setEnabled(bool(self.photo_grid.selected_indices()) and not self._working)
+        self.export_button.setEnabled(
+            bool(self.photo_grid.selected_indices()) and not pending and not self._working
+        )
         self.extract_button.setEnabled(
             has_scan and any(boundary.selected for boundary in self._boundaries) and not self._working
         )
@@ -554,6 +680,10 @@ class MainWindow(QMainWindow):
         if not self._boundaries or not any(item.selected for item in self._boundaries):
             self._set_status("Select at least one detected photo first")
             return
+        if self._review_boundaries():
+            self._reviewing = True
+            self._advance_review()
+            return
         image = self._scan
         boundaries = self._boundaries
         straighten = self.auto_straighten.isChecked()
@@ -578,11 +708,8 @@ class MainWindow(QMainWindow):
             if boundary.needs_review and not boundary.user_confirmed
         ]
         if unconfirmed:
-            QMessageBox.warning(
-                self,
-                "Review photo boundaries",
-                "Confirm or adjust the dashed photo boundaries on the scan before exporting.",
-            )
+            self._reviewing = True
+            self._advance_review()
             return
         if self._output_directory is None:
             self._choose_output_folder()
@@ -706,6 +833,7 @@ class MainWindow(QMainWindow):
         self._scan_path = path
         self._scan = image
         self._boundaries_modified = False
+        self._reviewing = False
         self._updating_scan_view = True
         boundaries = outcome.boundaries if isinstance(outcome, (DetectionSuccess, AmbiguousDetections)) else ()
         self.scan_view.set_scan(image, boundaries)

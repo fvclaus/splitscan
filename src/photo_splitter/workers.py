@@ -7,6 +7,7 @@ from typing import Any
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 from photo_splitter.domain import OperationCancelled
+from photo_splitter.telemetry import capture_exception
 
 class WorkerSignals(QObject):
     finished = Signal(int, object)
@@ -32,4 +33,5 @@ class Worker(QRunnable):
             self.signals.cancelled.emit(self.token)
         except Exception as exc:
             logging.exception("Photo processing failed")
+            capture_exception(exc)
             self.signals.failed.emit(self.token, str(exc) or type(exc).__name__)

@@ -1,4 +1,4 @@
-# Photo splitter
+# SplitScan
 
 ## Goal
 
@@ -6,7 +6,7 @@ Split one flatbed scan containing several photos into individually deskewed, cro
 
 ## Agreed scope
 
-- Python desktop app with PySide6 UI, guided by the Keepsake workspace in Figma file `hdIkkiu6AL9aADv5U48HlG`, node `4:1077`.
+- Python desktop app with PySide6 UI, guided by the original Keepsake workspace in Figma file `hdIkkiu6AL9aADv5U48HlG`, node `4:1077`, now branded SplitScan.
 - OpenCV contour detection first, with OpenCV watershed automatically attempted for likely touching-photo regions. Review watershed proposals before export. Keep a detector seam for future backends; SAM is deferred.
 - Editable quadrilateral boundaries, add/select/deselect actions, corner-drag loupe at 3×, photo previews, auto-straighten and border-trim options.
 - One input scan at a time. Remember one output folder between scans and app launches.
