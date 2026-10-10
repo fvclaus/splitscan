@@ -47,6 +47,38 @@ options clears stale previews. Adjust edge sensitivity and re-detect if needed.
 **Cancel processing** stops between processing stages, not during an OpenCV operation.
 The output folder is remembered between scans and launches.
 
+## Alternatives and complementary tools
+
+SplitScan can replace the **post-scan photo splitting step**, not an entire commercial
+scanning suite. Acquire a full-bed scan with free, open-source software such as
+[NAPS2](https://www.naps2.com/) on Windows, macOS, or Linux, or use your existing
+scanner software. Save it as PNG, TIFF, or JPEG, then import it into SplitScan.
+Your scanner still needs a compatible driver or scanning backend; SplitScan does
+not control scanners or import PDFs.
+
+### Commercial desktop apps
+
+| Application | What SplitScan can replace | Features outside SplitScan's scope |
+| --- | --- | --- |
+| [AutoSplitter](https://autosplitter.com/) | Separating photos from an existing scan, reviewing and adjusting crops, straightening, and exporting individual JPEGs. | Direct scanning, color restoration, captions, and metadata editing. |
+| [ScanSpeeder](https://scanspeeder.com/) | Separating photos from an imported scan, adjusting crops, straightening, and exporting individual JPEGs. | Scanner/feeder/film acquisition, photo enhancement, captions/tags, bulk workflows, and archival/high-bit-depth output capabilities. |
+
+### GitHub CLI and script tools
+
+| Project | Overlapping workflow | Key distinction |
+| --- | --- | --- |
+| [alexhorn/AutoCrop](https://github.com/alexhorn/AutoCrop) | Cropping multiple photos from one scan. | A Python CLI requiring ImageMagick 6; SplitScan provides visual boundary review and corner editing. |
+| [hspedro/crop-scanned-photos](https://github.com/hspedro/crop-scanned-photos) | Detecting and cropping multiple photos against a white scanner background. | Offers folder processing, configurable thresholds, and threading; SplitScan processes one scan at a time interactively. |
+| [bozjator/auto-scan-splitter](https://github.com/bozjator/auto-scan-splitter) | Splitting and deskewing multi-photo scans. | Includes Linux folder watchers, services, and SMB/NAS transfer queues, which SplitScan does not provide. |
+
+[z80z80z80/autocrop](https://github.com/z80z80z80/autocrop) is related but expects
+**one photo per scan**, roughly cropped beforehand; it crops and rotates those images
+rather than separating a multi-photo scan.
+
+These comparisons describe feature scope based on the linked product documentation
+and project READMEs, not measured detection accuracy or performance. SplitScan exports
+lossy JPEGs and does not replace lossless/high-bit-depth archival workflows.
+
 <img src="docs/assets/scanner.svg" alt="Use your scanner. Keep processing local. No photo uploads; the original scan stays intact." width="1000">
 
 ## Privacy
