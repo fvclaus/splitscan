@@ -73,6 +73,9 @@ Network services can still observe connection metadata such as the source IP.
 - macOS downloads are not Developer ID signed or notarized. Gatekeeper may require an explicit
   per-app approval through macOS Privacy & Security after you verify the download.
   Windows may also warn about an unsigned application. Do not disable system-wide protections.
+- Linux archives expect the system's graphics/X11 runtime libraries. On Ubuntu 22.04, install
+  `libegl1 libgl1 libxkbcommon0 libdbus-1-3 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1
+  libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0` if they are missing.
 
 ## Run from source
 
