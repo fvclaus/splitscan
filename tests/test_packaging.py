@@ -12,7 +12,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tools import download_sources, license_audit, verify_release_artifacts
+from tools import build_mac_opencv, download_sources, license_audit, verify_release_artifacts
 from tools.build_mac_opencv import validate_image_only_build
 
 
@@ -94,6 +94,115 @@ def test_mac_accepts_image_only_build() -> None:
         "    To be built: core imgcodecs imgproc python3\n"
         "    Unavailable: videoio\n"
     )
+
+
+def test_mac_recipe_uses_uv_for_builder_wheel_and_runtime(monkeypatch, tmp_path):
+    import hashlib
+    from types import SimpleNamespace
+
+    payload = b"pinned source archive"
+    commands = []
+    builders = []
+    monkeypatch.setattr(build_mac_opencv, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("TMPDIR", str(tmp_path))
+    monkeypatch.setattr(build_mac_opencv, "SOURCE_SHA256", hashlib.sha256(payload).hexdigest())
+    monkeypatch.setattr(
+        build_mac_opencv.urllib.request, "urlopen",
+        lambda *args, **kwargs: SimpleNamespace(read=lambda: payload),
+    )
+    monkeypatch.setattr(build_mac_opencv.venv.EnvBuilder, "create", lambda self, path: builders.append(
+        (path, self.with_pip)
+    ))
+    monkeypatch.setitem(sys.modules, "cv2", SimpleNamespace(
+        getBuildInformation=lambda: "    To be built: core imgproc imgcodecs python3\n"
+    ))
+    (tmp_path / "requirements-mac-opencv.txt").write_text("numpy==2.2.6\n")
+
+    def run(command, *, env, check):
+        assert check
+        commands.append(command)
+        if command[:2] == ["uv", "build"]:
+            assert env["ENABLE_HEADLESS"] == "1"
+            assert "-DWITH_FFMPEG=OFF" in env["CMAKE_ARGS"]
+            directory = Path(command[command.index("--out-dir") + 1])
+            directory.mkdir()
+            with zipfile.ZipFile(directory / "opencv_python_headless-4.11.0.86-test.whl", "w") as archive:
+                archive.writestr("cv2/cv2.so", b"native image-only code")
+
+    monkeypatch.setattr(build_mac_opencv.subprocess, "run", run)
+    assert build_mac_opencv.main() == 0
+    work = tmp_path / "build" / "mac-opencv"
+    builder_python = str(work / "builder" / "bin" / "python")
+    assert builders == [(work / "builder", False)]
+    assert commands[0] == [
+        "uv", "pip", "install", "--python", builder_python,
+        "-r", str(tmp_path / "requirements-mac-opencv.txt"),
+    ]
+    assert commands[1] == [
+        "uv", "build", "--python", builder_python, "--wheel", "--no-build-isolation",
+        "--out-dir", str(work / "wheels"), str(work / "opencv-python-headless-4.11.0.86.tar.gz"),
+    ]
+    assert commands[2][:-1] == [
+        "uv", "pip", "install", "--python", sys.executable, "--system", "--no-deps", "--reinstall",
+    ]
+    provenance = json.loads((work / "provenance.json").read_text())
+    assert provenance["build_command"] == commands[1]
+    assert provenance["native_files"][0]["path"] == "cv2/cv2.so"
+
+
+def test_native_icons_render_shared_brand_mark(tmp_path):
+    import struct
+    from PySide6.QtGui import QImage
+    from tools.build_icons import write_icons
+
+    write_icons(tmp_path)
+    ico = (tmp_path / "splitscan.ico").read_bytes()
+    reserved, kind, count = struct.unpack_from("<HHH", ico)
+    assert (reserved, kind, count) == (0, 1, 7)
+    sizes = []
+    for index in range(count):
+        width, height, _, _, planes, depth, length, offset = struct.unpack_from(
+            "<BBBBHHII", ico, 6 + 16 * index
+        )
+        width, height = width or 256, height or 256
+        assert planes == 1 and depth == 32
+        image = QImage.fromData(ico[offset:offset + length], "PNG")
+        assert not image.isNull()
+        assert (image.width(), image.height()) == (width, height)
+        assert image.pixelColor(width // 8, height // 2).name() == "#286b58"
+        # At small sizes, the white scan line blends with the green background.
+        assert image.pixelColor(width // 2, height // 2).red() > 100
+        assert image.pixelColor(0, 0).alpha() == 0
+        sizes.append(width)
+    assert sizes == [16, 24, 32, 48, 64, 128, 256]
+    icns = (tmp_path / "splitscan.icns").read_bytes()
+    assert icns[:4] == b"icns"
+    assert struct.unpack_from(">I", icns, 4)[0] == len(icns)
+    offset = 8
+    for expected_kind, size in ((b"ic07", 128), (b"ic08", 256), (b"ic09", 512), (b"ic10", 1024)):
+        assert icns[offset:offset + 4] == expected_kind
+        length = struct.unpack_from(">I", icns, offset + 4)[0]
+        image = QImage.fromData(icns[offset + 8:offset + length], "PNG")
+        assert (image.width(), image.height()) == (size, size)
+        offset += length
+    assert offset == len(icns)
+
+
+def test_pyinstaller_spec_wires_native_icon_files():
+    import ast
+
+    source = Path("build-config/splitscan.spec").read_text()
+    tree = ast.parse(source)
+    icon_arguments = {
+        call.func.id: next(keyword.value for keyword in call.keywords if keyword.arg == "icon")
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+        and call.func.id in {"EXE", "BUNDLE"}
+    }
+    assert "splitscan.ico" in ast.unparse(icon_arguments["EXE"])
+    assert "win32" in ast.unparse(icon_arguments["EXE"])
+    assert "splitscan.icns" in ast.unparse(icon_arguments["BUNDLE"])
 
 
 def test_mac_rejects_ffmpeg_linkage(

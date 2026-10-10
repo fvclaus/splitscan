@@ -15,6 +15,13 @@ not certified for every distribution; systems must provide compatible glibc
 and desktop/display libraries. The applications include Python, Qt, and other
 Python runtime dependencies, so users do not install Python separately.
 
+The application/window icon and header use the same green SplitScan scan-line mark
+from `src/photo_splitter/assets/splitscan.svg`. Packaging renders that SVG into
+multi-resolution Windows ICO and macOS ICNS resources using `tools/build_icons.py`;
+Linux taskbars receive the icon through Qt's window icon. Rebuild the native archive
+to update executable/bundle icons. A previously pinned shortcut may retain an OS-cached
+icon and need to be unpinned and pinned again after replacing the application.
+
 Every archive contains `LICENSE`, `THIRD_PARTY_NOTICES/`,
 `dependency-inventory.json`, and `native-libraries.json`. The inventory
 records versions, source locations, license-text provenance, and SHA-256
@@ -62,6 +69,9 @@ application reads still images and does not need video decoding.
 `tools/build_mac_opencv.py` and `requirements-mac-opencv.txt` define the native
 recipe and pinned builder environment. Run
 `python tools/build_mac_opencv.py` on each Mac before `python tools/package.py`.
+The recipe requires `uv` on PATH: it installs the builder dependencies, builds the
+wheel with `uv build --no-build-isolation`, and installs it into the Python interpreter
+running the recipe. The builder environment does not require pip.
 The dependency inventory embeds the actual local wheel digest, original
 sdist URL/digest, native-file hashes, CMake arguments, and runtime build
 information rather than attributing the custom binary to a downloaded wheel.
@@ -87,6 +97,12 @@ downloads, and final archive verification as tags, using a nonpublishing
 `0.1.0.dev<run-number>` candidate. Manual candidates also run the complete gate.
 Only a successful `vMAJOR.MINOR.PATCH` tag push can publish a GitHub Release,
 and publication depends on the completed `validate-release` gate.
+
+GitHub Actions uses pinned uv 0.12.3 to install dependencies into the pinned
+Python 3.12.10 interpreter supplied by `actions/setup-python`. `uv pip install`
+preserves the existing requirements-file and project dependency pins; it does not
+use `uv.lock`. Tests and packaging run directly with that interpreter, so no
+automatic project sync replaces the custom macOS OpenCV wheel before packaging.
 
 Native ownership is matched by installed-distribution content hashes, not by
 generic Qt/OpenCV filename guesses. The inventory preserves PyInstaller's

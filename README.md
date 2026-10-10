@@ -3,7 +3,6 @@
 </p>
 
 <p align="center">
-  <strong>One flatbed scan. Individual photos. You stay in control of the edges.</strong><br>
   A local desktop application for detecting, reviewing, straightening, and exporting scanned photographs.
 </p>
 
@@ -13,11 +12,6 @@
   <a href="#privacy">Privacy</a> &nbsp;·&nbsp;
   <a href="#run-from-source">Run from source</a>
 </p>
-
-> Downloads appear after the first successful tagged release. Portable builds target Windows x64,
-> macOS Intel and Apple Silicon, and Linux x64. Download the archive for your platform,
-> extract **all** its contents, and launch SplitScan; Python is not required.
-> Keep the bundled libraries and notices beside the application.
 
 ![The SplitScan desktop workspace with a source scan and extracted photo previews](docs/assets/workspace.png)
 
@@ -37,8 +31,9 @@ After the last review, extraction is available again; it does not start automati
 | Action | Gesture |
 | --- | --- |
 | Pan | Hold **Space** and left-drag, or middle-mouse drag |
-| Zoom | Mouse wheel or **Ctrl + wheel**, or the zoom buttons |
-| Pan horizontally | **Shift + wheel** |
+| Scroll vertically | Mouse wheel |
+| Zoom | **Ctrl + wheel**, or the zoom buttons |
+| Scroll horizontally | **Shift + wheel** |
 | Return to the whole scan | **Fit** |
 | Cancel a corner drag | **Escape** |
 
@@ -85,11 +80,31 @@ lossy JPEGs and does not replace lossless/high-bit-depth archival workflows.
 
 **All processing happens on device.** Scans and extracted photos are not uploaded.
 
-Crash reporting is **optional and off by default**. If you enable it in the application,
+Usage statistics and sanitized crash reports are **independent, optional, and off by default**.
+On first launch, SplitScan asks you to choose whether to enable either option. Saving your
+choices remembers them, including declining both. Closing the dialog without saving keeps
+reporting inactive for that launch and asks again next launch. Change either choice anytime
+in **Settings**, beside **About**.
+
+If you enable usage statistics, Sentry receives events for opening the app, loading a scan,
+committing a valid border correction, successfully extracting photos, and successfully saving
+photos. Events include only the interaction name, photo count for extraction/save batches,
+application version, and operating system, plus event identifiers and timestamps. No user or
+device identifiers are collected. Re-detection, mouse movements, failed/cancelled operations,
+and cancelled border edits are not counted.
+
+If you enable crash reporting,
 sanitized error diagnostics are sent to Sentry: exception types, application stack locations,
 application version, and operating system. Photos, image arrays, filenames, user paths,
-exception messages, and sensitive breadcrumbs are stripped. Disable reporting at any time.
-Network services can still observe connection metadata such as the source IP.
+exception messages, and sensitive breadcrumbs are stripped.
+Only these crash diagnostics use Sentry's **Issues** ingestion. Usage issues sent by
+older app versions remain in Sentry until you resolve or remove them there; this change
+does not modify existing Sentry data.
+
+Neither option sends photos, image data, filenames, or user paths. Disabling an option stops
+future reports and discards pending telemetry from the previous configuration; requests
+already in flight cannot be recalled. Network services can still observe connection metadata
+such as the source IP.
 
 ## Output and limitations
 
@@ -140,10 +155,12 @@ photo-splitter --smoke-test
 ```
 
 Tests exercise detection, invalid/uncertain boundaries, guided review, editing and loupe behavior,
-pan/zoom gestures, crop/export safety, settings, and telemetry sanitization.
+pan/zoom gestures, crop/export safety, privacy consent, usage event counts, and telemetry sanitization.
 Headless Qt tests use the offscreen platform; telemetry tests never send real events.
 
 GitHub Actions validate pushes and pull requests with native builds and packaged smoke tests.
+CI uses pinned uv for dependency installation and the custom macOS OpenCV wheel build,
+while retaining the pinned Python interpreter and requirements files.
 Version tags build release artifacts; publication is gated on successful builds and license checks.
 The version is included in the app and download filenames.
 See [distribution instructions](docs/DISTRIBUTION.md) for the supported build baseline,

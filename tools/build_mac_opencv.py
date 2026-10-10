@@ -63,10 +63,11 @@ def main() -> int:
     for old_wheel in (work / "wheels").glob("opencv_python_headless-*.whl"):
         old_wheel.unlink()
     builder = work / "builder"
-    venv.EnvBuilder(with_pip=True).create(builder)
+    venv.EnvBuilder().create(builder)
     python = builder / "bin" / "python"
     subprocess.run(
-        [str(python), "-m", "pip", "install", "-r", str(ROOT / "requirements-mac-opencv.txt")],
+        ["uv", "pip", "install", "--python", str(python),
+         "-r", str(ROOT / "requirements-mac-opencv.txt")],
         env=environment, check=True,
     )
     environment.update({
@@ -75,15 +76,16 @@ def main() -> int:
         "CMAKE_BUILD_PARALLEL_LEVEL": str(min(os.cpu_count() or 2, 4)),
         "MACOSX_DEPLOYMENT_TARGET": "12.0",
     })
-    command = [str(python), "-m", "pip", "wheel", "--no-deps", "--no-build-isolation",
-               "--wheel-dir", str(work / "wheels"), str(source)]
+    command = ["uv", "build", "--python", str(python), "--wheel", "--no-build-isolation",
+               "--out-dir", str(work / "wheels"), str(source)]
     subprocess.run(command, env=environment, check=True)
     wheels = list((work / "wheels").glob("opencv_python_headless-*.whl"))
     if len(wheels) != 1:
         raise RuntimeError("Expected exactly one locally compiled OpenCV wheel")
     wheel = wheels[0]
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)],
+        ["uv", "pip", "install", "--python", sys.executable, "--system",
+         "--no-deps", "--reinstall", str(wheel)],
         env=environment, check=True,
     )
     import cv2

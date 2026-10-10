@@ -17,6 +17,7 @@ class ScanView(QWidget):
     boundaries_changed = Signal(object)
     selection_changed = Signal()
     edit_rejected = Signal(str)
+    boundary_corrected = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -340,6 +341,10 @@ class ScanView(QWidget):
         if event.button() == Qt.MouseButton.LeftButton and self._drag_corner is not None:
             index, _ = self._drag_corner
             changed = self._boundaries[index] != self._original_boundary
+            corners_changed = (
+                self._original_boundary is not None
+                and self._boundaries[index].corners != self._original_boundary.corners
+            )
             valid = validate_corners(self._boundaries[index].corners, self._image.shape)
             if changed and valid:
                 self._boundaries[index] = self._boundaries[index].confirmed()
@@ -347,6 +352,8 @@ class ScanView(QWidget):
             self._original_boundary = None
             self._drag_current = None
             self.boundaries_changed.emit(self.boundaries)
+            if corners_changed and valid:
+                self.boundary_corrected.emit()
         elif event.button() == Qt.MouseButton.LeftButton and self._add_mode:
             start = self._drag_start
             current = event.position()
@@ -434,13 +441,10 @@ class ScanView(QWidget):
             ) / 3
             self._pan += QPointF(delta, 0)
             self.update()
-        elif pixel.x() or angle.x():
-            self._pan += QPointF(pixel.x() if pixel.x() else angle.x() / 3, 0)
-            self.update()
         else:
-            delta = pixel.y() or angle.y()
-            if delta:
-                self.zoom_by(1.12 if delta > 0 else 1 / 1.12)
+            delta = QPointF(pixel) if not pixel.isNull() else QPointF(angle) / 3
+            self._pan += delta
+            self.update()
         event.accept()
 
     def _hit_corner(self, point: QPointF) -> tuple[int, int] | None:

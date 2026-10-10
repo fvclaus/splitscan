@@ -43,6 +43,7 @@ from photo_splitter.imaging import (
     read_scan,
 )
 from photo_splitter.preferences import Preferences
+from photo_splitter.privacy_dialog import PrivacyDialog
 from photo_splitter import telemetry
 from photo_splitter.widgets.photo_grid import PhotoGrid, PhotoPreview
 from photo_splitter.widgets.scan_view import ScanView
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("SplitScan")
+        self.setWindowIcon(QIcon(str(ASSETS / "splitscan.svg")))
         self.setMinimumSize(800, 700)
         self.resize(1440, 900)
         self.setStyleSheet(
@@ -83,6 +85,7 @@ class MainWindow(QMainWindow):
         self._workers: dict[int, Worker] = {}
         self._token = 0
         self._active_token = 0
+        self._job_kind = ""
         self._scan_path: Path | None = None
         self._scan: np.ndarray | None = None
         self._boundaries: tuple[PhotoBoundary, ...] = ()
@@ -112,15 +115,17 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         brand_mark = QLabel()
-        brand_mark.setPixmap(QIcon(str(ASSETS / "scan-line.svg")).pixmap(20, 20))
+        brand_mark.setPixmap(self.windowIcon().pixmap(30, 30))
         brand_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         brand_mark.setFixedSize(30, 30)
-        brand_mark.setStyleSheet(f"background:{GREEN}; color:white; border-radius:7px; font-size:18px;")
         brand = QLabel("SplitScan")
         brand.setFont(QFont("Inter", 15, QFont.Weight.Medium))
         header_layout.addWidget(brand_mark)
         header_layout.addWidget(brand)
         header_layout.addStretch()
+        self.settings_button = QPushButton("Settings")
+        self.settings_button.clicked.connect(self._show_settings)
+        header_layout.addWidget(self.settings_button)
         self.about_button = QPushButton("About")
         self.about_button.clicked.connect(self._show_about)
         header_layout.addWidget(self.about_button)
@@ -189,16 +194,6 @@ class MainWindow(QMainWindow):
         tip.setStyleSheet(f"color:{MUTED}; font-size:11px;")
         footer.addWidget(tip)
         root_layout.addLayout(footer)
-        reporting_row = QHBoxLayout()
-        self.crash_reporting = QCheckBox("Send sanitized crash reports (optional)")
-        self.crash_reporting.setChecked(self._preferences.crash_reporting())
-        self.crash_reporting.toggled.connect(self._set_crash_reporting)
-        reporting_row.addWidget(self.crash_reporting)
-        disclosure = QLabel("When enabled, diagnostics go to Sentry. Photos and filenames are not sent.")
-        disclosure.setWordWrap(True)
-        disclosure.setStyleSheet(f"color:{MUTED}; font-size:11px;")
-        reporting_row.addWidget(disclosure)
-        root_layout.addLayout(reporting_row)
 
         status_bar = QFrame()
         status_bar.setObjectName("status")
@@ -273,6 +268,9 @@ class MainWindow(QMainWindow):
         self.scan_view.boundaries_changed.connect(self._boundaries_changed)
         self.scan_view.selection_changed.connect(self._selection_changed)
         self.scan_view.edit_rejected.connect(self._set_status)
+        self.scan_view.boundary_corrected.connect(
+            lambda: telemetry.capture_usage("boundary_corrected")
+        )
         layout.addWidget(self.scan_view, stretch=1)
 
         source_footer = QHBoxLayout()
@@ -306,8 +304,9 @@ class MainWindow(QMainWindow):
         review_actions.addWidget(self.exclude_boundary_button)
         layout.addLayout(review_actions)
         gestures = QLabel(
-            "Pan: Space + drag or middle-drag · Zoom: wheel / Ctrl + wheel\n"
-            "Horizontal pan: Shift + wheel · Drag a corner to adjust · Esc cancels"
+            "Pan: Space + drag or middle-drag · Zoom: Ctrl + wheel\n"
+            "Scroll: wheel · Horizontal scroll: Shift + wheel\n"
+            "Drag a corner to adjust · Esc cancels"
         )
         gestures.setWordWrap(True)
         gestures.setStyleSheet(f"color:{MUTED}; font-size:11px; padding:8px 16px;")
@@ -428,7 +427,7 @@ class MainWindow(QMainWindow):
 
     def _load_scan(self, path: Path) -> None:
         threshold = self.threshold_spin.value()
-        self._start_job(lambda: self._load_operation(path, threshold), "Loading scan…")
+        self._start_job(lambda: self._load_operation(path, threshold), "Loading scan…", kind="import")
 
     def _load_operation(self, path: Path, threshold: int):
         image = read_scan(path)
@@ -471,22 +470,8 @@ class MainWindow(QMainWindow):
             "Downloads: https://github.com/fvclaus/splitscan/releases/latest",
         )
 
-    def _set_crash_reporting(self, enabled: bool) -> None:
-        previous = self._preferences.crash_reporting()
-        try:
-            self._preferences.set_crash_reporting(enabled)
-            telemetry.configure(enabled)
-        except (OSError, ImportError, ValueError) as exc:
-            rollback_error = ""
-            try:
-                self._preferences.set_crash_reporting(previous)
-            except OSError as error:
-                rollback_error = f"\nCould not restore saved consent: {error}"
-            telemetry.configure(previous)
-            self.crash_reporting.blockSignals(True)
-            self.crash_reporting.setChecked(previous)
-            self.crash_reporting.blockSignals(False)
-            QMessageBox.warning(self, "Could not change crash reporting", str(exc) + rollback_error)
+    def _show_settings(self) -> None:
+        PrivacyDialog(self._preferences, self).exec()
 
     def _review_boundaries(self) -> tuple[PhotoBoundary, ...]:
         if self._scan is None:
@@ -691,6 +676,7 @@ class MainWindow(QMainWindow):
         self._start_job(
             lambda: self._extract_selected(image, boundaries, straighten, trim),
             "Extracting preview photos…",
+            kind="extract",
         )
 
     def _export_selected(self) -> None:
@@ -731,6 +717,7 @@ class MainWindow(QMainWindow):
                 cancelled=self._cancel_event.is_set,
             ),
             "Exporting JPEGs…",
+            kind="export",
         )
 
     def _choose_output_folder(self) -> None:
@@ -765,7 +752,7 @@ class MainWindow(QMainWindow):
         self._selection_changed()
         self._update_controls()
 
-    def _start_job(self, operation, message: str) -> None:
+    def _start_job(self, operation, message: str, *, kind: str = "") -> None:
         if self._working:
             return
         self._cancel_event.clear()
@@ -773,6 +760,7 @@ class MainWindow(QMainWindow):
         self._token += 1
         token = self._token
         self._active_token = token
+        self._job_kind = kind
         worker = Worker(token, operation)
         worker.signals.finished.connect(self._job_finished)
         worker.signals.failed.connect(self._job_failed)
@@ -795,14 +783,20 @@ class MainWindow(QMainWindow):
         self._working = False
         if isinstance(result, tuple) and len(result) == 3 and isinstance(result[0], Path):
             self._accept_scan(*result)
+            if self._job_kind == "import" and not isinstance(result[2], DetectionFailure):
+                telemetry.capture_usage("scan_loaded")
         elif isinstance(result, tuple) and (not result or isinstance(result[0], PhotoPreview)):
             self.photo_grid.set_previews(result)
             self.result_count.setText(str(len(result)))
             self.ready_badge.setText("Ready to export")
             self._update_selection_count()
             self._set_status(f"{len(result)} photo previews ready")
+            if result and self._job_kind == "extract":
+                telemetry.capture_usage("photos_extracted", len(result))
         elif isinstance(result, tuple) and (not result or isinstance(result[0], ExportedPhoto)):
             self._accept_export(result)
+            if result and self._job_kind == "export":
+                telemetry.capture_usage("photos_saved", len(result))
         else:
             self._set_status("Operation finished")
         self._update_controls()

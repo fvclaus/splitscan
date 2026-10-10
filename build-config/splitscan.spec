@@ -136,6 +136,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=version_resource,
+    icon=str(generated_version_dir / "icons" / "splitscan.ico") if sys.platform == "win32" else None,
 )
 coll = COLLECT(
     exe,
@@ -150,7 +151,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="SplitScan.app",
-        icon=None,
+        icon=str(generated_version_dir / "icons" / "splitscan.icns"),
         bundle_identifier="org.keepsake.splitscan",
         info_plist={
             "CFBundleName": "SplitScan",

@@ -13,6 +13,7 @@ from photo_splitter.main_window import MainWindow
 from photo_splitter.preferences import Preferences
 from photo_splitter.widgets.scan_view import ScanView
 from photo_splitter.workers import Worker
+from photo_splitter import telemetry
 
 
 def wait_for_job(app, window):
@@ -24,7 +25,21 @@ def wait_for_job(app, window):
     assert not window._working
 
 
+def test_main_window_has_splitscan_taskbar_icon(app):
+    window = MainWindow()
+    try:
+        assert not window.windowIcon().isNull(), "SplitScan must set its taskbar/window icon"
+        image = window.windowIcon().pixmap(64, 64).toImage()
+        assert not image.isNull()
+        assert image.pixelColor(8, 32).name() == "#286b58"
+        assert image.pixelColor(32, 32).name() == "#ffffff"
+    finally:
+        window.close()
+
+
 def test_import_preview_export_and_option_invalidation(app, tmp_path, monkeypatch):
+    events = []
+    monkeypatch.setattr(telemetry, "capture_usage", lambda *args: events.append(args))
     monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
     monkeypatch.setattr(
         QMessageBox, "warning", lambda *args: (_ for _ in ()).throw(AssertionError(args[-1]))
@@ -42,15 +57,21 @@ def test_import_preview_export_and_option_invalidation(app, tmp_path, monkeypatc
     window._load_scan(path)
     wait_for_job(app, window)
     assert len(window._boundaries) == 2
+    assert events == [("scan_loaded",)]
+    window._redetect()
+    wait_for_job(app, window)
+    assert events == [("scan_loaded",)]
     window._start_preview()
     wait_for_job(app, window)
     assert len(window.photo_grid.items) == 2
+    assert events == [("scan_loaded",), ("photos_extracted", 2)]
     window.photo_grid._checks[1].setChecked(False)
     window.view_mode.setCurrentIndex(1)
     assert window.photo_grid.selected_indices() == (0,)
     window._export_selected()
     wait_for_job(app, window)
     assert len(list(tmp_path.glob("*.jpg"))) == 1
+    assert events == [("scan_loaded",), ("photos_extracted", 2), ("photos_saved", 1)]
     assert path.read_bytes() == source_bytes
     window.trim_borders.setChecked(False)
     assert not window.photo_grid.items
@@ -59,12 +80,14 @@ def test_import_preview_export_and_option_invalidation(app, tmp_path, monkeypatc
 
 
 def test_loupe_tracks_drag_and_escape_restores_corner(app):
+    corrections = []
     view = ScanView()
     view.resize(620, 480)
     view.show()
     image = np.full((300, 400, 3), 240, np.uint8)
     boundary = PhotoBoundary(corners=((30, 30), (350, 30), (350, 250), (30, 250)))
     view.set_scan(image, (boundary,))
+    view.boundary_corrected.connect(lambda: corrections.append(True))
     app.processEvents()
     corner = view._image_to_widget(30, 30).toPoint()
     QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=corner)
@@ -77,13 +100,80 @@ def test_loupe_tracks_drag_and_escape_restores_corner(app):
     QTest.keyClick(view, Qt.Key.Key_Escape)
     assert view.boundaries[0].corners == boundary.corners
     assert view._drag_corner is None
+    assert not corrections
     QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=corner)
     QTest.mouseMove(view, corner + QPoint(9, 7))
     QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=corner + QPoint(9, 7))
     assert view._drag_corner is None
     assert view._drag_current is None
     assert view.boundaries[0].user_confirmed
+    assert corrections == [True]
     view.close()
+
+
+@pytest.mark.parametrize("finish", ["release", "escape", "focus_loss", "unchanged", "invalid"])
+def test_committed_border_correction_events(app, monkeypatch, finish):
+    events = []
+    monkeypatch.setattr(telemetry, "capture_usage", lambda *args: events.append(args))
+    window = MainWindow()
+    window.show()
+    image = np.full((300, 400, 3), 240, np.uint8)
+    boundary = PhotoBoundary(corners=((30, 30), (350, 30), (350, 250), (30, 250)))
+    window._scan = image
+    window.scan_view.set_scan(image, (boundary,))
+    app.processEvents()
+    view = window.scan_view
+    corner = view._image_to_widget(30, 30).toPoint()
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=corner)
+    if finish != "unchanged":
+        for offset in (QPoint(4, 3), QPoint(8, 5), QPoint(12, 8)):
+            QTest.mouseMove(view, corner + offset)
+        assert not events
+    if finish == "escape":
+        QTest.keyClick(view, Qt.Key.Key_Escape)
+    elif finish == "focus_loss":
+        window.settings_button.setFocus()
+        app.processEvents()
+    elif finish == "invalid":
+        from dataclasses import replace
+        view._boundaries[0] = replace(boundary, corners=((30, 30),) * 4)
+        QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=corner)
+    else:
+        QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=corner + QPoint(12, 8))
+    assert events == ([("boundary_corrected",)] if finish == "release" else [])
+    window.close()
+
+
+def test_confirmation_selection_failed_cancelled_and_stale_jobs_do_not_count(app, monkeypatch):
+    from photo_splitter.domain import DetectionFailure
+    from photo_splitter.widgets.photo_grid import PhotoPreview
+
+    events = []
+    monkeypatch.setattr(telemetry, "capture_usage", lambda *args: events.append(args))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    window = MainWindow()
+    image = np.full((300, 400, 3), 240, np.uint8)
+    boundary = PhotoBoundary(
+        corners=((30, 30), (350, 30), (350, 250), (30, 250)), needs_review=True
+    )
+    window._scan = image
+    window.scan_view.set_scan(image, (boundary,))
+    window.scan_view.confirm_selected_boundary()
+    window._set_all_boundaries_selected(False)
+    assert not events
+    preview = PhotoPreview(boundary, image, 320, 220)
+    window._active_token = 12
+    window._job_kind = "extract"
+    window._job_finished(11, (preview,))
+    window._job_failed(12, "Failed")
+    window._cancel_event.set()
+    window._job_finished(12, (preview,))
+    window._cancel_event.clear()
+    window._job_finished(12, ())
+    window._job_kind = "import"
+    window._job_finished(12, (Path("private.png"), image, DetectionFailure("Failed")))
+    assert not events
+    window.close()
 
 
 def test_preferences_survive_new_instance_and_reject_missing_directory(app, tmp_path):

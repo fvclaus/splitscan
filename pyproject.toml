@@ -14,7 +14,7 @@ dependencies = [
     "numpy==2.2.6",
     "opencv-python-headless==4.11.0.86",
     "PySide6-Essentials==6.8.3",
-    "sentry-sdk==2.27.0",
+    "sentry-sdk==2.35.0",
 ]
 
 [project.optional-dependencies]

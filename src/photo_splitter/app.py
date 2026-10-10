@@ -5,11 +5,12 @@ import os
 import tempfile
 from pathlib import Path
 
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from photo_splitter.main_window import MainWindow
+from photo_splitter.main_window import ASSETS, MainWindow
 from photo_splitter.preferences import Preferences
+from photo_splitter.privacy_dialog import PrivacyDialog
 from photo_splitter import telemetry
 
 
@@ -28,6 +29,7 @@ def smoke_test(app: QApplication) -> int:
     assert isinstance(outcome, (DetectionSuccess, AmbiguousDetections)), outcome
     assert outcome.boundaries
     assert (ASSETS / "scan.svg").is_file()
+    assert (ASSETS / "splitscan.svg").is_file()
     if getattr(sys, "frozen", False):
         bundle = Path(sys._MEIPASS)
         package_root = bundle.parent if sys.platform == "darwin" else bundle
@@ -53,6 +55,8 @@ def smoke_test(app: QApplication) -> int:
     window.show()
     app.processEvents()
     assert not window.grab().isNull()
+    assert not app.windowIcon().isNull()
+    assert not window.windowIcon().pixmap(64, 64).isNull()
     window.close()
     print(f"SplitScan {__version__}: Qt, assets, detection and export smoke test passed")
     return 0
@@ -71,15 +75,20 @@ def main() -> int:
     app.setApplicationName("SplitScan")
     app.setOrganizationName("Keepsake")
     app.setFont(QFont("Inter", 10))
+    app.setWindowIcon(QIcon(str(ASSETS / "splitscan.svg")))
     if testing:
         return smoke_test(app)
     preferences = Preferences()
+    telemetry.configure(False)
     try:
-        telemetry.configure(preferences.crash_reporting())
+        if not preferences.privacy_choices_saved():
+            PrivacyDialog(preferences).exec()
+        else:
+            telemetry.configure(preferences.crash_reporting(), preferences.usage_statistics())
     except (ImportError, ValueError, OSError) as error:
         QMessageBox.warning(
-            None, "Crash reporting unavailable",
-            f"Crash reporting could not start and remains disabled:\n{error}",
+            None, "Reporting unavailable",
+            f"Reporting could not start and remains disabled:\n{error}",
         )
         telemetry.configure(False)
     previous_hook = sys.excepthook
@@ -96,6 +105,7 @@ def main() -> int:
     sys.excepthook = report_exception
     window = MainWindow()
     window.show()
+    telemetry.capture_usage("app_opened")
     try:
         return app.exec()
     finally:

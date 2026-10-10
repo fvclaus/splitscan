@@ -68,11 +68,17 @@ jobs:
             python tools/release.py resolve --run-number "$GITHUB_RUN_NUMBER"
           fi
 
-      - name: Install pinned build and application dependencies
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.12.3"
+          enable-cache: true
+
+      - name: Install pinned build and application dependencies with uv
         shell: bash
         run: |
-          python -m pip install --disable-pip-version-check -r requirements-build.txt
-          python -m pip install --disable-pip-version-check -e ".[test]"
+          uv pip install --system --python "$(python -c 'import sys; print(sys.executable)')" -r requirements-build.txt
+          uv pip install --system --python "$(python -c 'import sys; print(sys.executable)')" -e ".[test]"
 
       - name: Build image-only OpenCV without FFmpeg on macOS
         if: runner.os == 'macOS'
@@ -127,11 +133,17 @@ jobs:
             python tools/release.py resolve --run-number "$GITHUB_RUN_NUMBER"
           fi
 
-      - name: Install pinned runtime and source tooling
+      - name: Set up pinned uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          version: "0.12.3"
+          enable-cache: true
+
+      - name: Install pinned runtime and source tooling with uv
         shell: bash
         run: |
-          python -m pip install --disable-pip-version-check -r requirements-build.txt
-          python -m pip install --disable-pip-version-check .
+          uv pip install --system --python "$(python -c 'import sys; print(sys.executable)')" -r requirements-build.txt
+          uv pip install --system --python "$(python -c 'import sys; print(sys.executable)')" .
 
       - name: Download, verify, and assemble official source materials
         shell: bash

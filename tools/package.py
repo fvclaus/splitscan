@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from tools.license_audit import audit_bundle, create_inventory
+from tools.build_icons import write_icons
 from photo_splitter.version import __version__, validate_version
 
 
@@ -142,6 +143,7 @@ def main() -> int:
     (generated_version_dir / "_splitscan_build_version.py").write_text(
         f"BUILD_VERSION = {version!r}\n", encoding="utf-8"
     )
+    write_icons(generated_version_dir / "icons")
 
     environment = os.environ.copy()
     environment["SPLITSCAN_VERSION"] = version

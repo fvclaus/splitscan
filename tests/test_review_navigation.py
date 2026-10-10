@@ -179,8 +179,10 @@ def test_review_edit_advances_only_after_release_and_escape_restores(app, tmp_pa
     window.close()
 
 
-@pytest.mark.parametrize("modifier", [Qt.KeyboardModifier.NoModifier,
-                                   Qt.KeyboardModifier.ControlModifier])
+@pytest.mark.parametrize("modifier", [
+    Qt.KeyboardModifier.ControlModifier,
+    Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+])
 def test_wheel_zoom_preserved(app, modifier):
     view = ScanView()
     view.set_scan(np.zeros((300, 400, 3), np.uint8), ())
@@ -193,6 +195,36 @@ def test_wheel_zoom_preserved(app, modifier):
     assert view._pan == QPointF()
     view.fit_scan()
     assert view._zoom == 1
+    view.close()
+
+
+@pytest.mark.parametrize("pixel,angle,modifier,expected", [
+    (QPoint(), QPoint(0, 120), Qt.KeyboardModifier.NoModifier, QPointF(0, 40)),
+    (QPoint(), QPoint(0, -120), Qt.KeyboardModifier.NoModifier, QPointF(0, -40)),
+    (QPoint(0, 17), QPoint(0, 120), Qt.KeyboardModifier.NoModifier, QPointF(0, 17)),
+    (QPoint(0, -17), QPoint(0, -120), Qt.KeyboardModifier.NoModifier, QPointF(0, -17)),
+    (QPoint(), QPoint(120, 0), Qt.KeyboardModifier.NoModifier, QPointF(40, 0)),
+    (QPoint(8, 17), QPoint(), Qt.KeyboardModifier.NoModifier, QPointF(8, 17)),
+    (QPoint(), QPoint(0, -120), Qt.KeyboardModifier.ShiftModifier, QPointF(-40, 0)),
+    (QPoint(0, 17), QPoint(0, 120), Qt.KeyboardModifier.ShiftModifier, QPointF(17, 0)),
+    (QPoint(), QPoint(120, 0), Qt.KeyboardModifier.ShiftModifier, QPointF(40, 0)),
+    (QPoint(), QPoint(), Qt.KeyboardModifier.NoModifier, QPointF()),
+])
+def test_wheel_scrolls_without_zoom_or_boundary_changes(app, pixel, angle, modifier, expected):
+    view = ScanView()
+    boundary = PhotoBoundary(corners=((30, 30), (350, 30), (350, 250), (30, 250)))
+    view.set_scan(np.zeros((300, 400, 3), np.uint8), (boundary,))
+    view.zoom_by(2)
+    before = QPointF(view._pan)
+    event = QWheelEvent(
+        QPointF(100, 100), QPointF(100, 100), pixel, angle,
+        Qt.MouseButton.NoButton, modifier, Qt.ScrollPhase.NoScrollPhase, False,
+    )
+    app.sendEvent(view, event)
+    assert view._pan - before == expected
+    assert view._zoom == 2
+    assert view.boundaries == (boundary,)
+    assert event.isAccepted()
     view.close()
 
 

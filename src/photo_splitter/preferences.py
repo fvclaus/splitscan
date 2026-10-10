@@ -38,6 +38,30 @@ class Preferences:
     def crash_reporting(self) -> bool:
         return self._settings.value("crash_reporting", False, type=bool)
 
+    def usage_statistics(self) -> bool:
+        return self._settings.value("usage_statistics", False, type=bool)
+
+    def privacy_choices_saved(self) -> bool:
+        return self._settings.value("privacy_choices_saved", False, type=bool)
+
+    def set_privacy_choices(self, usage: bool, crashes: bool) -> None:
+        values = {
+            "usage_statistics": usage,
+            "crash_reporting": crashes,
+            "privacy_choices_saved": True,
+        }
+        previous = {key: self._settings.value(key, False, type=bool) for key in values}
+        for key, value in values.items():
+            self._settings.setValue(key, value)
+        self._settings.sync()
+        if self._settings.status() != QSettings.Status.NoError:
+            for key, value in previous.items():
+                self._settings.setValue(key, value)
+            self._settings.sync()
+            if self._settings.status() != QSettings.Status.NoError:
+                raise OSError("Could not save privacy choices or restore the previous saved choices.")
+            raise OSError("Could not save privacy choices.")
+
     def set_crash_reporting(self, enabled: bool) -> None:
         previous = self.crash_reporting()
         self._settings.setValue("crash_reporting", enabled)
