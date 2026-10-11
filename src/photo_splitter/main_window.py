@@ -746,7 +746,7 @@ class MainWindow(QMainWindow):
                 "Adjust this boundary to a valid outline inside the scan, or exclude it."
             )
         self.review_message.setText(message)
-        self.confirm_boundary_button.setText("Confirm & next" if self._reviewing else "Confirm boundary")
+        self.confirm_boundary_button.setText("Confirm && next" if self._reviewing else "Confirm boundary")
         self.confirm_boundary_button.setEnabled(active_review and valid and not self._working)
         self.confirm_boundary_button.setVisible(active_review)
         confirmable = self._confirmable_boundaries()
@@ -770,7 +770,7 @@ class MainWindow(QMainWindow):
         exported_count = len(self.photo_grid.selected_indices())
         export_text = f"Export {exported_count} photos"
         if self._batch is not None and not self._batch.is_last:
-            export_text += " & next scan"
+            export_text += " && next scan"
         self.export_button.setText(export_text)
         self.skip_button.setVisible(self._batch is not None)
         self.skip_button.setEnabled(self._batch is not None and not self._working)

@@ -128,7 +128,7 @@ def test_multi_select_runs_batch_with_export_next_skip_and_summary(
     assert not window.batch_bar.isHidden()
     assert window.batch_bar.title_text == "Scan 1 of 3 · scan-1.png"
     assert len(window.photo_grid.items) == 2
-    assert window.export_button.text() == "Export 2 photos & next scan"
+    assert window.export_button.text() == "Export 2 photos && next scan"
     assert window.skip_button.isVisible()
 
     window._export_selected()
