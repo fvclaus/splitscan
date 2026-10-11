@@ -209,6 +209,7 @@ def test_independent_consent_and_allowlisted_usage_envelopes(monkeypatch, usage,
         telemetry.capture_usage("app_opened")
         telemetry.capture_usage("scan_loaded")
         telemetry.capture_usage("boundary_corrected")
+        telemetry.capture_usage("batch_started", 4)
         telemetry.capture_exception(ValueError("/home/private/secret-photo.jpg"))
         if telemetry._client is not None:
             telemetry._client.flush(timeout=1)
@@ -218,7 +219,7 @@ def test_independent_consent_and_allowlisted_usage_envelopes(monkeypatch, usage,
             for log in item.payload.json["items"]
         ]
         crash_events = [item.payload.json for item in items if item.headers["type"] == "event"]
-        assert len(usage_events) == (5 if usage else 0)
+        assert len(usage_events) == (6 if usage else 0)
         assert len(crash_events) == (1 if crashes else 0)
         assert all("exception" in event for event in crash_events)
         assert {item.headers["type"] for item in items} <= {"log", "event"}
@@ -232,12 +233,13 @@ def test_independent_consent_and_allowlisted_usage_envelopes(monkeypatch, usage,
                 "os", "sentry.release", "sentry.severity_number", "sentry.severity_text",
             }
             if event["body"] in telemetry.COUNTED_EVENTS:
-                expected_attributes.add("photo_count")
+                expected_attributes.add(telemetry.COUNTED_EVENTS[event["body"]])
             assert set(event["attributes"]) == expected_attributes
         if usage:
             assert usage_events[0]["attributes"]["photo_count"] == {"value": 3, "type": "integer"}
             assert usage_events[1]["attributes"]["photo_count"] == {"value": 2, "type": "integer"}
-            assert len({event["trace_id"] for event in usage_events}) == 5
+            assert usage_events[5]["attributes"]["scan_count"] == {"value": 4, "type": "integer"}
+            assert len({event["trace_id"] for event in usage_events}) == 6
         serialized = b"".join(envelope.serialize() for envelope in envelopes)
         assert b"private" not in serialized and b"secret-photo" not in serialized
         envelope_count = len(envelopes)
@@ -342,6 +344,7 @@ def test_revocation_drops_buffered_logs_before_delivery(monkeypatch):
 @pytest.mark.parametrize("name,count", [
     ("unknown", None), ("photos_saved", None), ("photos_saved", 0),
     ("photos_saved", True), ("photos_extracted", -1), ("app_opened", 1),
+    ("batch_started", None), ("batch_started", 0),
 ])
 def test_usage_rejects_invalid_event_data(name, count):
     with pytest.raises(ValueError):

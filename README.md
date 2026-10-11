@@ -19,12 +19,28 @@
 
 | 01 · Import a scan | 02 · Review the boundaries | 03 · Export individual files |
 | --- | --- | --- |
-| Scan several prints together, then import one JPEG, PNG, TIFF, or BMP. SplitScan detects candidate photo outlines. | If selected photos need attention, choose **Review boundaries**. Confirm each valid suggestion, drag corners to correct it, or exclude it. Invalid outlines require correction, not just confirmation. | Choose **Extract photos** to see previews and pixel dimensions, then export selected crops to a folder. Your original scan is never changed. |
+| Scan several prints together, then import a JPEG, PNG, TIFF, or BMP. SplitScan detects candidate photo outlines. Select several files to work through them as a batch. | If selected photos need attention, choose **Review boundaries**. Confirm each valid suggestion, use **Confirm all** for every valid suggestion at once, drag corners to correct an outline, or exclude it. Invalid outlines require correction, not just confirmation. | Previews and pixel dimensions appear automatically once nothing needs review. Export selected crops to a folder; your original scan is never changed. |
 
 **Fine-tune every edge.** Drag a corner to adjust an outline; a floating 3× loupe helps align it.
 Use **Add boundary** for a missed photo. Click an outline to include or exclude it.
 Review navigation does not change which photos you have included.
 After the last review, extraction is available again; it does not start automatically.
+
+**Work through a batch.** Select several scans in **Import scan** and SplitScan opens them in
+filename order. A progress bar shows the current scan, what was exported or skipped, and how many
+remain. **Export N photos & next scan** saves the current scan and opens the next one;
+**Skip scan** moves on without exporting. Scans that cannot be read are skipped and listed in the
+summary shown at the end. Importing again ends the batch.
+
+**Keyboard shortcuts.**
+
+| Action | Shortcut |
+| --- | --- |
+| Confirm boundary and go to the next one | **Enter** (scan canvas focused) |
+| Confirm all valid suggestions | **Shift + Enter** (scan canvas focused) |
+| Exclude the photo under review | **Delete** (scan canvas focused) |
+| Export (and open the next scan in a batch) | **Ctrl + Enter** |
+| Skip scan in a batch | **Ctrl + Shift + Enter** |
 
 **Navigate the canvas.**
 
@@ -87,8 +103,9 @@ reporting inactive for that launch and asks again next launch. Change either cho
 in **Settings**, beside **About**.
 
 If you enable usage statistics, Sentry receives events for opening the app, loading a scan,
-committing a valid border correction, successfully extracting photos, and successfully saving
-photos. Events include only the interaction name, photo count for extraction/save batches,
+committing a valid border correction, starting a batch of scans, successfully extracting photos
+(once per loaded scan), and successfully saving photos. Events include only the interaction
+name, photo count for extraction/save batches, scan count for a started batch,
 application version, and operating system, plus event identifiers and timestamps. No user or
 device identifiers are collected. Re-detection, mouse movements, failed/cancelled operations,
 and cancelled border edits are not counted.

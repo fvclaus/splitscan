@@ -57,11 +57,9 @@ def test_import_preview_export_and_option_invalidation(app, tmp_path, monkeypatc
     window._load_scan(path)
     wait_for_job(app, window)
     assert len(window._boundaries) == 2
-    assert events == [("scan_loaded",)]
+    assert len(window.photo_grid.items) == 2
+    assert events == [("scan_loaded",), ("photos_extracted", 2)]
     window._redetect()
-    wait_for_job(app, window)
-    assert events == [("scan_loaded",)]
-    window._start_preview()
     wait_for_job(app, window)
     assert len(window.photo_grid.items) == 2
     assert events == [("scan_loaded",), ("photos_extracted", 2)]
@@ -121,7 +119,8 @@ def test_committed_border_correction_events(app, monkeypatch, finish):
     boundary = PhotoBoundary(corners=((30, 30), (350, 30), (350, 250), (30, 250)))
     window._scan = image
     window.scan_view.set_scan(image, (boundary,))
-    app.processEvents()
+    wait_for_job(app, window)
+    events.clear()
     view = window.scan_view
     corner = view._image_to_widget(30, 30).toPoint()
     QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=corner)

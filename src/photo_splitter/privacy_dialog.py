@@ -33,8 +33,9 @@ class PrivacyDialog(QDialog):
             self.crash_reporting.setChecked(preferences.crash_reporting())
         layout.addWidget(self.usage_statistics)
         usage = QLabel(
-            "Sentry Logs receives app opens, scan loads, committed border corrections, and successful "
-            "photo extractions and saves, with photo counts where relevant, app version and OS."
+            "Sentry Logs receives app opens, scan loads, started batches, committed border corrections, "
+            "and successful photo extractions and saves, with photo or scan counts where relevant, "
+            "app version and OS."
         )
         usage.setWordWrap(True)
         layout.addWidget(usage)
