@@ -4,3 +4,26 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+
+# Claude Code sandbox bind-mount stubs (created automatically on each launch)
+.bash_profile
+.bashrc
+.gitconfig
+.gitmodules
+.idea
+.mcp.json
+.profile
+.ripgreprc
+.zprofile
+.zshrc
+
+# Same, under .claude/. The masked *directories* (agents, commands, hooks,
+# routines, skills, workflows, output-styles) are pre-created with a tracked .gitkeep by
+# safe-claude-code so bwrap binds over them instead of leaking stubs. These two
+# are files, not directories, so they can't be .gitkeep'd; ignore their launch-time stubs.
+.claude/launch.json
+.claude/scheduled_tasks.json
+
+# CLAUDE.local.md is personal, per-launch context — safe-claude-code regenerates
+# it from claudeFragmentsDir on every launch (when configured). Never commit it.
+CLAUDE.local.md
