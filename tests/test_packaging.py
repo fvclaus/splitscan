@@ -46,6 +46,21 @@ def test_development_candidate_runs_complete_artifact_gate(monkeypatch: pytest.M
     ] + [("sources", "0.1.0.dev42")]
 
 
+def test_artifact_gate_can_be_limited_to_selected_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    checked = []
+    monkeypatch.setattr(sys, "argv", [
+        "verify_release_artifacts.py", "--directory", "build/candidate",
+        "--version", "0.1.0.dev42", "--target", "linux-x64",
+    ])
+    monkeypatch.setattr(
+        verify_release_artifacts, "verify_binary",
+        lambda path, target, version: checked.append(target),
+    )
+    monkeypatch.setattr(verify_release_artifacts, "verify_sources", lambda path, version: None)
+    assert verify_release_artifacts.main() == 0
+    assert checked == ["linux-x64"]
+
+
 def test_source_collection_accepts_development_candidate(
     monkeypatch: pytest.MonkeyPatch, scratch_path: Path,
 ) -> None:

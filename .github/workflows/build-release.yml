@@ -2,8 +2,6 @@ name: Native build, tests, and release
 
 on:
   push:
-    branches:
-      - "**"
     tags:
       - "v*"
   pull_request:
@@ -28,15 +26,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: windows-x64
-            runner: windows-2022
-          - target: macos-x64
-            runner: macos-15-intel
-          - target: macos-arm64
-            runner: macos-15
-          - target: linux-x64
-            runner: ubuntu-22.04
+        # Pull requests build Linux only; tags and manual candidates build every target.
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"target":"linux-x64","runner":"ubuntu-22.04"}]' || '[{"target":"windows-x64","runner":"windows-2022"},{"target":"macos-x64","runner":"macos-15-intel"},{"target":"macos-arm64","runner":"macos-15"},{"target":"linux-x64","runner":"ubuntu-22.04"}]') }}
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -202,7 +193,12 @@ jobs:
 
       - name: Verify release archives, checksums, manifests, notices, and sources
         shell: bash
-        run: python tools/verify_release_artifacts.py --directory build/release --version "$SPLITSCAN_VERSION"
+        run: |
+          targets=()
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            targets=(--target linux-x64)
+          fi
+          python tools/verify_release_artifacts.py --directory build/release --version "$SPLITSCAN_VERSION" "${targets[@]}"
 
       - name: Upload verified release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -142,13 +142,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--version", required=True)
+    parser.add_argument(
+        "--target", action="append", choices=TARGETS,
+        help="Native target to verify; repeat for several. Defaults to every target.",
+    )
     args = parser.parse_args()
     args.version = validate_version(args.version)
-    for target in TARGETS:
+    targets = tuple(args.target) if args.target else TARGETS
+    for target in targets:
         verify_binary(args.directory / f"splitscan-{args.version}-{target}.zip", target, args.version)
     source_archive = args.directory / f"splitscan-v{args.version}-corresponding-source.zip"
     verify_sources(source_archive, args.version)
-    print(f"Verified four native archives and version-matched sources for {args.version}")
+    print(f"Verified {len(targets)} native archive(s) and version-matched sources for {args.version}")
     return 0
 
 
