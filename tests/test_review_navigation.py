@@ -68,8 +68,8 @@ def test_guided_review_before_extraction(app, tmp_path):
     assert window.scan_view.selected_boundary_index == 1
     assert window.extract_button.text() == "Review 1 boundary"
     window._confirm_boundary()
-    assert window.extract_button.text() == "Extract 2 photos"
-    assert not window._working
+    assert window.extract_button.isHidden()
+    assert window._working
     assert all(item.selected for item in window._boundaries)
     window.close()
 
@@ -255,6 +255,7 @@ def test_scan_replacement_resets_review_and_hand_mode(app, tmp_path):
     assert not window._reviewing
     assert not window.scan_view._space_pan
     assert not window.scan_view._add_mode
-    assert window.extract_button.text() == "Extract 1 photo"
+    assert window.extract_button.isHidden()
+    assert window._working
     assert window.confirm_boundary_button.isHidden()
     window.close()

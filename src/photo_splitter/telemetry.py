@@ -18,8 +18,13 @@ _usage_enabled = False
 _delivery_allowed = Event()
 USAGE_EVENTS = frozenset({
     "app_opened", "scan_loaded", "boundary_corrected", "photos_extracted", "photos_saved",
+    "batch_started",
 })
-COUNTED_EVENTS = frozenset({"photos_extracted", "photos_saved"})
+COUNTED_EVENTS = {
+    "photos_extracted": "photo_count",
+    "photos_saved": "photo_count",
+    "batch_started": "scan_count",
+}
 
 
 def sanitize_event(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any]:
@@ -73,10 +78,11 @@ def _filter_log(log: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | N
         "sentry.release": f"SplitScan@{__version__}",
     }
     if name in COUNTED_EVENTS:
-        count = log.get("attributes", {}).get("photo_count")
+        attribute = COUNTED_EVENTS[name]
+        count = log.get("attributes", {}).get(attribute)
         if type(count) is not int or count <= 0:
-            raise ValueError("Usage photo count must be a positive integer.")
-        attributes["photo_count"] = count
+            raise ValueError("Usage count must be a positive integer.")
+        attributes[attribute] = count
     return {
         "time_unix_nano": log["time_unix_nano"],
         # Avoid linking usage records through SDK-generated session/trace context.
@@ -154,21 +160,21 @@ def capture_exception(exception: BaseException) -> None:
             logging.exception("Could not submit sanitized crash report")
 
 
-def capture_usage(name: str, photo_count: int | None = None) -> None:
+def capture_usage(name: str, count: int | None = None) -> None:
     if name not in USAGE_EVENTS:
         raise ValueError(f"Unknown usage event: {name}")
     if name in COUNTED_EVENTS:
-        if type(photo_count) is not int or photo_count <= 0:
-            raise ValueError("Usage photo count must be a positive integer.")
-    elif photo_count is not None:
-        raise ValueError("This usage event does not accept a photo count.")
+        if type(count) is not int or count <= 0:
+            raise ValueError("Usage count must be a positive integer.")
+    elif count is not None:
+        raise ValueError("This usage event does not accept a count.")
     client, scope = _client, _scope
     if _usage_enabled and client is not None and scope is not None:
         try:
             from sentry_sdk import logger
             from sentry_sdk.scope import use_scope
 
-            attributes = {"photo_count": photo_count} if photo_count is not None else {}
+            attributes = {COUNTED_EVENTS[name]: count} if count is not None else {}
             with use_scope(scope):
                 logger.info(name, attributes=attributes)
         except Exception:

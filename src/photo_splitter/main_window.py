@@ -7,7 +7,7 @@ from threading import Event
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QThreadPool, QTimer
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QFont, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from photo_splitter.batch import Batch, ScanOutcome
 from photo_splitter.detection import OpenCVPhotoDetector
 from photo_splitter.detection.geometry import validate_corners
 from photo_splitter.domain import (
@@ -45,6 +46,7 @@ from photo_splitter.imaging import (
 from photo_splitter.preferences import Preferences
 from photo_splitter.privacy_dialog import PrivacyDialog
 from photo_splitter import telemetry
+from photo_splitter.widgets.batch_bar import BatchBar
 from photo_splitter.widgets.photo_grid import PhotoGrid, PhotoPreview
 from photo_splitter.widgets.scan_view import ScanView
 from photo_splitter.workers import Worker
@@ -93,6 +95,8 @@ class MainWindow(QMainWindow):
         self._updating_scan_view = False
         self._working = False
         self._reviewing = False
+        self._batch: Batch | None = None
+        self._extract_reported = False
         self._cancel_event = Event()
         self._output_directory = self._preferences.output_directory()
         self._threshold_timer = QTimer(self)
@@ -135,6 +139,9 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.import_button)
         root_layout.addWidget(header)
 
+        self.batch_bar = BatchBar()
+        root_layout.addWidget(self.batch_bar)
+
         panes = QSplitter(Qt.Orientation.Horizontal)
         self.panes = panes
         panes.setChildrenCollapsible(False)
@@ -157,6 +164,7 @@ class MainWindow(QMainWindow):
             f"background:{GREEN}; color:white; border:0; font-weight:600; padding:12px 6px;"
         )
         self.extract_button.clicked.connect(self._start_preview)
+        self.extract_button.hide()
         center_layout.addWidget(self.extract_selection_label)
         center_layout.addWidget(self.extract_button)
         self.cancel_button = QPushButton("Cancel processing")
@@ -210,6 +218,39 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(status_bar)
         self.setCentralWidget(root)
         self.statusBar().hide()
+        self._install_shortcuts()
+
+    def _install_shortcuts(self) -> None:
+        def press(button: QPushButton):
+            return lambda: button.click() if button.isVisible() and button.isEnabled() else None
+
+        review_keys = (
+            ("Return", self.confirm_boundary_button),
+            ("Enter", self.confirm_boundary_button),
+            ("Shift+Return", self.confirm_all_button),
+            ("Shift+Enter", self.confirm_all_button),
+            ("Delete", self.exclude_boundary_button),
+        )
+        window_keys = (
+            ("Ctrl+Return", self.export_button),
+            ("Ctrl+Enter", self.export_button),
+            ("Ctrl+Shift+Return", self.skip_button),
+            ("Ctrl+Shift+Enter", self.skip_button),
+        )
+        # Plain keys act only while the scan canvas has focus, so they never steal text editing.
+        for keys, context, target in (
+            (review_keys, Qt.ShortcutContext.WidgetShortcut, self.scan_view),
+            (window_keys, Qt.ShortcutContext.WindowShortcut, self),
+        ):
+            for sequence, button in keys:
+                shortcut = QShortcut(QKeySequence(sequence), target)
+                shortcut.setContext(context)
+                shortcut.activated.connect(press(button))
+        self.confirm_boundary_button.setToolTip("Enter")
+        self.confirm_all_button.setToolTip("Shift+Enter")
+        self.exclude_boundary_button.setToolTip("Delete")
+        self.export_button.setToolTip("Ctrl+Enter")
+        self.skip_button.setToolTip("Ctrl+Shift+Enter")
 
     def _build_source_panel(self) -> QWidget:
         panel = self._card()
@@ -247,6 +288,8 @@ class MainWindow(QMainWindow):
         tools.addWidget(self.add_boundary_button)
         self.confirm_boundary_button = QPushButton("✓  Confirm boundary")
         self.confirm_boundary_button.clicked.connect(self._confirm_boundary)
+        self.confirm_all_button = QPushButton("Confirm all")
+        self.confirm_all_button.clicked.connect(self._confirm_all_boundaries)
         tools.addStretch()
         self.zoom_out_button = QPushButton()
         self.zoom_out_button.setIcon(QIcon(str(ASSETS / "minus.svg")))
@@ -299,6 +342,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.review_message)
         review_actions = QHBoxLayout()
         review_actions.addWidget(self.confirm_boundary_button)
+        review_actions.addWidget(self.confirm_all_button)
         self.exclude_boundary_button = QPushButton("Exclude photo")
         self.exclude_boundary_button.clicked.connect(self._exclude_review_boundary)
         review_actions.addWidget(self.exclude_boundary_button)
@@ -373,8 +417,8 @@ class MainWindow(QMainWindow):
         self.auto_straighten.setChecked(True)
         self.trim_borders = QCheckBox("Trim borders")
         self.trim_borders.setChecked(True)
-        self.auto_straighten.toggled.connect(self._invalidate_previews)
-        self.trim_borders.toggled.connect(self._invalidate_previews)
+        self.auto_straighten.toggled.connect(self._options_changed)
+        self.trim_borders.toggled.connect(self._options_changed)
         folder_row = QHBoxLayout()
         folder_text = QVBoxLayout()
         self.folder_title = QLabel("Save to")
@@ -395,6 +439,10 @@ class MainWindow(QMainWindow):
         export_description.setStyleSheet(f"font-size:10px; color:{MUTED};")
         export_row.addWidget(export_description)
         export_row.addStretch()
+        self.skip_button = QPushButton("Skip scan")
+        self.skip_button.clicked.connect(self._skip_scan)
+        self.skip_button.hide()
+        export_row.addWidget(self.skip_button)
         self.export_button = QPushButton("Export selected")
         self.export_button.setIcon(QIcon(str(ASSETS / "download.svg")))
         self.export_button.clicked.connect(self._export_selected)
@@ -414,16 +462,87 @@ class MainWindow(QMainWindow):
     def _choose_scan(self) -> None:
         if self._working:
             return
-        if self._boundaries_modified and not self._confirm_discard():
+        if self._batch is not None:
+            if not self._confirm_stop_batch():
+                return
+        elif self._boundaries_modified and not self._confirm_discard():
             return
-        filename, _ = QFileDialog.getOpenFileName(
+        filenames, _ = QFileDialog.getOpenFileNames(
             self,
             "Import scan",
             str(self._scan_path.parent) if self._scan_path else str(Path.home()),
             "Scans (*.jpg *.jpeg *.png *.tif *.tiff *.bmp);;All files (*)",
         )
-        if filename:
-            self._load_scan(Path(filename))
+        if not filenames:
+            return
+        self._set_batch(Batch.from_paths([Path(name) for name in filenames]) if len(filenames) > 1 else None)
+        if self._batch is not None:
+            telemetry.capture_usage("batch_started", self._batch.total)
+            self._load_scan(self._batch.current)
+        else:
+            self._load_scan(Path(filenames[0]))
+
+    def _confirm_stop_batch(self) -> bool:
+        response = QMessageBox.question(
+            self,
+            "Stop the batch?",
+            "Importing a new scan ends the current batch. Continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return response == QMessageBox.StandardButton.Yes
+
+    def _set_batch(self, batch: Batch | None) -> None:
+        self._batch = batch
+        self.batch_bar.set_batch(batch)
+
+    def _skip_scan(self) -> None:
+        if self._working or self._batch is None:
+            return
+        self._batch.record_skipped()
+        self._next_batch_scan()
+
+    def _next_batch_scan(self) -> None:
+        batch = self._batch
+        if batch is None:
+            return
+        path = batch.advance()
+        if path is None:
+            self._finish_batch()
+            return
+        self.batch_bar.set_batch(batch)
+        self._load_scan(path)
+
+    def _batch_scan_failed(self, reason: str) -> None:
+        if self._batch is None:
+            return
+        self._batch.record_failed(reason)
+        self._next_batch_scan()
+
+    def _finish_batch(self, *, cancelled: bool = False) -> None:
+        batch = self._batch
+        if batch is None:
+            return
+        self._batch = None
+        lines = [
+            f"Exported {batch.photos_exported} photo{'s' if batch.photos_exported != 1 else ''} "
+            f"from {batch.count(ScanOutcome.EXPORTED)} of {batch.total} scans."
+        ]
+        if cancelled:
+            lines.insert(0, "The batch was cancelled.")
+        skipped = batch.names(ScanOutcome.SKIPPED)
+        if skipped:
+            lines.append(f"\nSkipped ({len(skipped)}): " + ", ".join(skipped))
+        failed = sorted(batch.failures.items())
+        if failed:
+            lines.append(f"\nCouldn't be read ({len(failed)}):")
+            lines.extend(f"  {batch.paths[index].name}: {reason}" for index, reason in failed)
+        if self._output_directory is not None and batch.photos_exported:
+            lines.append(f"\nSaved to: {self._output_directory}")
+        self.batch_bar.set_batch(None)
+        self._set_status(lines[0])
+        self._update_controls()
+        QMessageBox.information(self, "Batch complete", "\n".join(lines))
 
     def _load_scan(self, path: Path) -> None:
         threshold = self.threshold_spin.value()
@@ -458,6 +577,29 @@ class MainWindow(QMainWindow):
         if self._working:
             return
         self.scan_view.confirm_selected_boundary()
+
+    def _confirmable_boundaries(self) -> tuple[PhotoBoundary, ...]:
+        if self._scan is None:
+            return ()
+        return tuple(
+            item for item in self._boundaries
+            if item.selected and item.needs_review and not item.user_confirmed
+            and validate_corners(item.corners, self._scan.shape)
+        )
+
+    def _confirm_all_boundaries(self) -> None:
+        confirmable = {item.boundary_id for item in self._confirmable_boundaries()}
+        if self._working or not confirmable:
+            return
+        boundaries = tuple(
+            item.confirmed() if item.boundary_id in confirmable else item
+            for item in self._boundaries
+        )
+        self.scan_view.set_boundaries(boundaries)
+        self._boundaries_changed(boundaries)
+        if self._review_boundaries() and not self._reviewing:
+            self._reviewing = True
+            self._advance_review()
 
     def _show_about(self) -> None:
         from photo_splitter.version import __version__
@@ -532,6 +674,11 @@ class MainWindow(QMainWindow):
         self._boundaries_modified = True
         self._invalidate_previews()
         self._update_detection_status()
+        self._auto_extract()
+
+    def _options_changed(self) -> None:
+        self._invalidate_previews()
+        self._auto_extract()
 
     def _invalidate_previews(self) -> None:
         self.photo_grid.set_previews(())
@@ -550,6 +697,8 @@ class MainWindow(QMainWindow):
             active = boundaries[index] if 0 <= index < len(boundaries) else None
             if active not in self._review_boundaries():
                 self._advance_review()
+        if not self._updating_scan_view:
+            self._auto_extract()
 
     def _selection_changed(self) -> None:
         selected = sum(boundary.selected for boundary in self._boundaries)
@@ -563,10 +712,11 @@ class MainWindow(QMainWindow):
         selected = sum(boundary.selected for boundary in self._boundaries)
         self.extract_selection_label.setText(f"{selected} photo{'s' if selected != 1 else ''} selected")
         pending = self._review_boundaries()
-        self.extract_button.setText(
-            f"Review {len(pending)} {'boundary' if len(pending) == 1 else 'boundaries'}"
-            if pending else f"Extract {selected} photo{'s' if selected != 1 else ''}"
-        )
+        if pending:
+            self.extract_button.setText(
+                f"Review {len(pending)} {'boundary' if len(pending) == 1 else 'boundaries'}"
+            )
+        self.extract_button.setVisible(bool(pending))
         self.extract_button.setIcon(QIcon(str(ASSETS / "arrow.svg")))
         self.detected_badge.setText(f"{count} photo{'s' if count != 1 else ''} detected")
         self._update_controls()
@@ -599,6 +749,10 @@ class MainWindow(QMainWindow):
         self.confirm_boundary_button.setText("Confirm & next" if self._reviewing else "Confirm boundary")
         self.confirm_boundary_button.setEnabled(active_review and valid and not self._working)
         self.confirm_boundary_button.setVisible(active_review)
+        confirmable = self._confirmable_boundaries()
+        self.confirm_all_button.setText(f"Confirm all ({len(confirmable)})")
+        self.confirm_all_button.setVisible(bool(confirmable))
+        self.confirm_all_button.setEnabled(bool(confirmable) and not self._working)
         self.exclude_boundary_button.setVisible(self._reviewing and active_review)
         self.exclude_boundary_button.setEnabled(not self._working)
         if not self._working:
@@ -613,6 +767,13 @@ class MainWindow(QMainWindow):
         self.trim_borders.setEnabled(not self._working)
         self.photo_grid.setEnabled(not self._working)
         self.cancel_button.setVisible(self._working)
+        exported_count = len(self.photo_grid.selected_indices())
+        export_text = f"Export {exported_count} photos"
+        if self._batch is not None and not self._batch.is_last:
+            export_text += " & next scan"
+        self.export_button.setText(export_text)
+        self.skip_button.setVisible(self._batch is not None)
+        self.skip_button.setEnabled(self._batch is not None and not self._working)
         self.export_button.setEnabled(
             bool(self.photo_grid.selected_indices()) and not pending and not self._working
         )
@@ -668,6 +829,22 @@ class MainWindow(QMainWindow):
         if self._review_boundaries():
             self._reviewing = True
             self._advance_review()
+            return
+        self._start_extraction()
+
+    def _auto_extract(self) -> None:
+        if (
+            self._working
+            or self._scan is None
+            or self.scan_view.editing_boundary
+            or not any(item.selected for item in self._boundaries)
+            or self._review_boundaries()
+        ):
+            return
+        self._start_extraction()
+
+    def _start_extraction(self) -> None:
+        if self._scan is None:
             return
         image = self._scan
         boundaries = self._boundaries
@@ -748,7 +925,6 @@ class MainWindow(QMainWindow):
         total = len(self.photo_grid.items)
         self.preview_selection_label.setText(f"{count} of {total} selected")
         self.result_count.setText(str(total))
-        self.export_button.setText(f"Export {count} photos")
         self._selection_changed()
         self._update_controls()
 
@@ -781,9 +957,12 @@ class MainWindow(QMainWindow):
             self._job_cancelled(token)
             return
         self._working = False
+        kind = self._job_kind
         if isinstance(result, tuple) and len(result) == 3 and isinstance(result[0], Path):
+            if kind == "import":
+                self._extract_reported = False
             self._accept_scan(*result)
-            if self._job_kind == "import" and not isinstance(result[2], DetectionFailure):
+            if kind == "import" and not isinstance(result[2], DetectionFailure):
                 telemetry.capture_usage("scan_loaded")
         elif isinstance(result, tuple) and (not result or isinstance(result[0], PhotoPreview)):
             self.photo_grid.set_previews(result)
@@ -791,12 +970,13 @@ class MainWindow(QMainWindow):
             self.ready_badge.setText("Ready to export")
             self._update_selection_count()
             self._set_status(f"{len(result)} photo previews ready")
-            if result and self._job_kind == "extract":
+            if result and kind == "extract" and not self._extract_reported:
+                self._extract_reported = True
                 telemetry.capture_usage("photos_extracted", len(result))
         elif isinstance(result, tuple) and (not result or isinstance(result[0], ExportedPhoto)):
-            self._accept_export(result)
-            if result and self._job_kind == "export":
+            if result and kind == "export":
                 telemetry.capture_usage("photos_saved", len(result))
+            self._accept_export(result)
         else:
             self._set_status("Operation finished")
         self._update_controls()
@@ -806,6 +986,11 @@ class MainWindow(QMainWindow):
         if token != self._active_token:
             return
         self._working = False
+        if self._batch is not None and self._job_kind == "import":
+            self._set_status(f"Skipped {self._batch.current.name}: {reason}")
+            self._batch_scan_failed(reason)
+            self._update_controls()
+            return
         self._set_status(f"Operation failed: {reason}")
         QMessageBox.warning(self, "Could not complete operation", reason)
         self._update_controls()
@@ -815,12 +1000,18 @@ class MainWindow(QMainWindow):
         if token == self._active_token:
             self._working = False
             self._set_status("Processing cancelled. The original scan is unchanged.")
+            if self._batch is not None and self._job_kind == "import":
+                self._finish_batch(cancelled=True)
             self._update_controls()
 
     def _accept_scan(
         self, path: Path, image: np.ndarray, outcome: DetectionOutcome
     ) -> None:
         if isinstance(outcome, DetectionFailure):
+            if self._batch is not None:
+                self._set_status(f"Skipped {path.name}: {outcome.reason}")
+                self._batch_scan_failed(outcome.reason)
+                return
             QMessageBox.warning(self, "Could not detect photos", outcome.reason)
             self._set_status(outcome.reason)
             return
@@ -853,11 +1044,16 @@ class MainWindow(QMainWindow):
             self._set_status(f"{len(boundaries)} photo boundaries detected")
         self._update_selection_count()
         self._update_controls()
+        self._auto_extract()
 
     def _accept_export(self, result: tuple[ExportedPhoto, ...]) -> None:
         files = ", ".join(item.path.name for item in result)
         self._set_status(f"Exported {len(result)} photo{'s' if len(result) != 1 else ''}: {files}")
         self.footer_status.setText(f"Saved to {self._output_directory}")
+        if self._batch is not None:
+            self._batch.record_exported(len(result))
+            self._next_batch_scan()
+            return
         QMessageBox.information(
             self,
             "Export complete",
